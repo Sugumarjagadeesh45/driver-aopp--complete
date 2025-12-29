@@ -1760,14 +1760,6 @@ const completeRide = useCallback(async () => {
     await saveRideState();
     console.log("✅ Ride state saved");
 
-    // Show success message immediately
-    Alert.alert(
-      "✅ Ride Completed Successfully",
-      `Fare: ₹${finalFare}\nDistance: ${finalDistance.toFixed(2)} km`,
-      [{ text: "OK" }],
-      { cancelable: true }
-    );
-
     console.log("========================================");
     console.log("✅ RIDE COMPLETION PROCESS FINISHED");
     console.log("========================================");
