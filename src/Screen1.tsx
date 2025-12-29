@@ -1581,11 +1581,19 @@ const startNavigation = useCallback(async (startLocation: LocationType) => {
       saveRideState();
     }, 100);
 
-    // 5. LOG SUCCESS (Alert disabled to prevent UI freeze)
+    // 5. SHOW SUCCESS MESSAGE (Alert disabled to prevent UI freeze)
     console.log("✅ ========================================");
     console.log("✅ RIDE STARTED SUCCESSFULLY");
     console.log("✅ Navigation to drop location is active");
     console.log("✅ ========================================");
+
+    // Show a brief toast-style message to user
+    Alert.alert(
+      "✅ Ride Started",
+      "Navigation to drop-off location is now active",
+      [{ text: "OK" }],
+      { cancelable: true }
+    );
 
   } else {
     Alert.alert("Invalid OTP", "The OTP you entered is incorrect. Please try again.");
@@ -1597,25 +1605,9 @@ const startNavigation = useCallback(async (startLocation: LocationType) => {
 
 
 
-
 const completeRide = useCallback(async () => {
   console.log("========================================");
   console.log("🏁 COMPLETE RIDE FUNCTION ENTRY");
-  console.log("========================================");
-  console.log("⏰ Entry Timestamp:", new Date().toISOString());
-  console.log("📊 Complete Current State:");
-  console.log("  - rideStatus:", rideStatus);
-  console.log("  - driverStatus:", driverStatus);
-  console.log("  - ride exists:", !!ride);
-  console.log("  - ride ID:", ride?.rideId);
-  console.log("  - location exists:", !!location);
-  console.log("  - location:", location);
-  console.log("  - otpVerificationLocation exists:", !!otpVerificationLocation);
-  console.log("  - isCompletingRide:", isCompletingRide);
-  console.log("  - socket exists:", !!socket);
-  console.log("  - socket connected:", socket?.connected);
-  console.log("  - socket id:", socket?.id);
-  console.log("  - socket hasEmit:", typeof socket?.emit === 'function');
   console.log("========================================");
 
   // ✅ FIX: Prevent multiple clicks
@@ -1642,22 +1634,14 @@ const completeRide = useCallback(async () => {
     return;
   }
 
-  // ✅ FIX: Set loading state immediately
+  // ✅ FIX: Show immediate loading state
   console.log("🔒 Setting isCompletingRide to TRUE");
   setIsCompletingRide(true);
   console.log("✅ isCompletingRide state set to TRUE");
 
-  // Calculate distance from OTP verification location or pickup
-  let startPoint = otpVerificationLocation;
+  // Calculate distance and fare
+  let startPoint = otpVerificationLocation || ride.pickup;
   
-  if (!startPoint) {
-    console.warn("⚠️ OTP Location missing, falling back to Pickup location");
-    startPoint = {
-      latitude: ride.pickup.latitude,
-      longitude: ride.pickup.longitude
-    };
-  }
-
   try {
     const distance = haversine(startPoint, location) / 1000;
     const finalDistance = Math.max(distance, 0.1); // Minimum 100 meters
@@ -1666,101 +1650,76 @@ const completeRide = useCallback(async () => {
     
     console.log(`💰 Fare Calculation: ${finalDistance.toFixed(2)}km * ₹${farePerKm} = ₹${finalFare}`);
 
-    // ✅ IMPORTANT: Wait for server confirmation BEFORE updating local state
-    let serverConfirmed = false;
+    // ✅ FIX: IMMEDIATE UI UPDATE - Don't wait for server
+    console.log("📝 IMMEDIATELY setting rideStatus to 'completed'");
+    setRideStatus("completed");
+    setDriverStatus("online");
 
-    if (socket && socket.connected) {
-      console.log("========================================");
-      console.log("📡 SOCKET EMIT SECTION");
-      console.log("========================================");
-      console.log("✅ Socket exists and is connected");
-      console.log("📡 Socket connected:", socket.connected);
-      console.log("📡 Socket ID:", socket.id);
-      console.log("📡 Socket has emit function:", typeof socket.emit === 'function');
-      console.log("📦 Payload being sent:");
-      const payload = {
-        rideId: ride.rideId,
-        driverId: driverId,
-        userId: userData?.userId,
-        distance: finalDistance,
-        fare: finalFare,
-        actualPickup: startPoint,
-        actualDrop: location,
-        timestamp: new Date().toISOString()
-      };
-      console.log(JSON.stringify(payload, null, 2));
-      console.log("========================================");
+    // Stop navigation
+    console.log("🛑 Stopping navigation");
+    stopNavigation();
 
-      // ✅ FIX: Increased timeout to 10 seconds and added better logging
-      serverConfirmed = await new Promise((resolve) => {
-        let responseReceived = false;
-        console.log("🚀 About to call socket.emit with event: 'driverCompletedRide'");
-        console.log("⏰ Emit Timestamp:", new Date().toISOString());
+    // Hide rider details
+    console.log("👤 Hiding rider details");
+    hideRiderDetails();
 
-        // Emit with callback
-        try {
-          socket.emit("driverCompletedRide", payload, (response: any) => {
-            // This callback is triggered when server responds
-            console.log("========================================");
-            console.log("📥 SOCKET CALLBACK TRIGGERED");
-            console.log("========================================");
-            console.log("⏰ Callback Timestamp:", new Date().toISOString());
-            console.log("📨 Callback invoked with response:", response);
-            console.log("🔍 Response type:", typeof response);
-            console.log("🔍 Response JSON:", JSON.stringify(response, null, 2));
+    // Prepare and show bill IMMEDIATELY
+    const billData = {
+      distance: `${finalDistance.toFixed(2)} km`,
+      travelTime: `${Math.round(finalDistance * 10)} mins`,
+      charge: finalFare,
+      userName: userData?.name || 'Customer',
+      userMobile: userData?.mobile || 'N/A',
+      baseFare: finalFare,
+      timeCharge: 0,
+      tax: 0
+    };
 
-            if (responseReceived) {
-              console.log("⚠️ Duplicate callback received, ignoring");
-              return;
-            }
+    console.log("💰 Preparing bill data:", billData);
+    setBillDetails(billData);
+    setShowBillModal(true);
 
-            responseReceived = true;
-            console.log("✅ Marking response as received");
-
-            if (response && response.success) {
-              console.log("✅ Server confirmed ride completion - SUCCESS");
-              resolve(true);
-            } else {
-              console.log("❌ Server rejected ride completion");
-              console.log("❌ Rejection reason:", response?.message);
-              Alert.alert("Server Error", response?.message || "Server did not confirm ride completion");
-              resolve(false);
-            }
-            console.log("========================================");
-          });
-          console.log("✅ socket.emit() call completed");
-          console.log("⏳ Waiting for server response (timeout: 10s)...");
-        } catch (emitError) {
-          console.error("❌ ERROR during socket.emit:", emitError);
-          console.error("❌ Error details:", JSON.stringify(emitError, null, 2));
-          resolve(false);
-        }
-
-        // ✅ FIX: Increased timeout to 10 seconds
-        setTimeout(() => {
-          if (!responseReceived) {
-            console.log("========================================");
-            console.log("⏰ TIMEOUT REACHED");
-            console.log("========================================");
-            console.log("⚠️ Server response timeout after 10s");
-            console.log("⚠️ Response was never received from server");
-            console.log("⚠️ Proceeding anyway...");
-            console.log("========================================");
-            resolve(true); // Proceed anyway after timeout
-          }
-        }, 10000);
-      });
-      console.log("🏁 Promise resolved, serverConfirmed:", serverConfirmed);
-    } else {
-      console.error("❌ Socket not connected! Cannot send ride completion");
-      Alert.alert("Connection Error", "Not connected to server. Please check your internet connection.");
-      return; // Don't proceed if socket not connected
-    }
-
-    if (!serverConfirmed && socket) {
-      // Try alternative endpoint via HTTP API
-      console.log("🔄 Trying HTTP API as fallback...");
+    // ✅ FIX: Send completion to server ASYNCHRONOUSLY (don't wait)
+    const sendCompletionToServer = async () => {
       try {
+        if (socket && socket.connected) {
+          const payload = {
+            rideId: ride.rideId,
+            driverId: driverId,
+            userId: userData?.userId,
+            distance: finalDistance,
+            fare: finalFare,
+            actualPickup: startPoint,
+            actualDrop: location,
+            timestamp: new Date().toISOString()
+          };
+
+          console.log("📡 Sending ride completion to server (async)");
+          
+          // Use a shorter timeout
+          socket.timeout(3000).emit("driverCompletedRide", payload, (err: any, response: any) => {
+            if (err) {
+              console.warn("⚠️ Server timeout or error, will retry via HTTP:", err);
+              // Try HTTP fallback
+              sendCompletionViaHTTP();
+            } else if (response && response.success) {
+              console.log("✅ Server acknowledged ride completion");
+            } else {
+              console.warn("⚠️ Server response not successful:", response);
+            }
+          });
+        } else {
+          // Socket not connected, use HTTP
+          sendCompletionViaHTTP();
+        }
+      } catch (error) {
+        console.error("❌ Error in async server communication:", error);
+      }
+    };
+
+    const sendCompletionViaHTTP = async () => {
+      try {
+        console.log("📡 Trying HTTP API for ride completion...");
         const response = await fetch(`${API_BASE}/api/rides/complete`, {
           method: 'POST',
           headers: {
@@ -1776,78 +1735,51 @@ const completeRide = useCallback(async () => {
         });
         
         if (response.ok) {
-          serverConfirmed = true;
           console.log("✅ HTTP API confirmed ride completion");
+        } else {
+          console.warn("⚠️ HTTP API failed:", response.status);
+          // Store locally for later sync
+          await AsyncStorage.setItem('pendingRideCompletion', JSON.stringify({
+            rideId: ride.rideId,
+            driverId: driverId,
+            distance: finalDistance,
+            fare: finalFare,
+            timestamp: new Date().toISOString()
+          }));
         }
       } catch (apiError) {
         console.error("❌ HTTP API error:", apiError);
       }
-    }
+    };
 
-    // Only proceed with UI updates if server confirmed (or we proceed anyway after timeout)
-    if (serverConfirmed || !socket) {
-      console.log("========================================");
-      console.log("✅ UPDATING UI - Server Confirmed");
-      console.log("========================================");
+    // Start async server communication
+    sendCompletionToServer();
 
-      // ✅ Now update local state
-      console.log("📝 Setting rideStatus to 'completed'");
-      setRideStatus("completed");
-      console.log("📝 Setting driverStatus to 'online'");
-      setDriverStatus("online");
+    // Save state
+    console.log("💾 Saving ride state");
+    await saveRideState();
+    console.log("✅ Ride state saved");
 
-      // ✅ Stop navigation
-      console.log("🛑 Stopping navigation");
-      stopNavigation();
+    // Show success message immediately
+    Alert.alert(
+      "✅ Ride Completed Successfully",
+      `Fare: ₹${finalFare}\nDistance: ${finalDistance.toFixed(2)} km`,
+      [{ text: "OK" }],
+      { cancelable: true }
+    );
 
-      // ✅ Hide rider details
-      console.log("👤 Hiding rider details");
-      hideRiderDetails();
-
-      // ✅ Prepare and show bill
-      const billData = {
-        distance: `${finalDistance.toFixed(2)} km`,
-        travelTime: `${Math.round(finalDistance * 10)} mins`,
-        charge: finalFare,
-        userName: userData?.name || 'Customer',
-        userMobile: userData?.mobile || 'N/A',
-        baseFare: finalFare,
-        timeCharge: 0,
-        tax: 0
-      };
-
-      console.log("💰 Preparing bill data:", billData);
-      console.log("📝 Setting bill details");
-      setBillDetails(billData);
-      console.log("📝 Setting showBillModal to true");
-      setShowBillModal(true);
-
-      // ✅ Save completed state
-      console.log("💾 Saving ride state");
-      await saveRideState();
-      console.log("✅ Ride state saved");
-
-      console.log("========================================");
-      console.log("✅ RIDE COMPLETION PROCESS FINISHED");
-      console.log("========================================");
-    } else {
-      console.log("========================================");
-      console.log("❌ SERVER DID NOT CONFIRM");
-      console.log("========================================");
-      Alert.alert("Connection Error", "Could not confirm ride completion with server. Please try again.");
-      console.error("❌ Server did not confirm ride completion");
-    }
+    console.log("========================================");
+    console.log("✅ RIDE COMPLETION PROCESS FINISHED");
+    console.log("========================================");
 
   } catch (error) {
     console.log("========================================");
     console.log("❌ ERROR IN COMPLETE RIDE");
     console.log("========================================");
-    console.error("❌ Error in completeRide:", error);
-    console.error("❌ Error stack:", (error as Error)?.stack);
-    console.log("========================================");
+    console.error("❌ Error:", error);
     Alert.alert("Error", "Failed to complete ride. Please try again.");
   } finally {
-    // ✅ FIX: Always reset loading state
+    // Always reset loading state
     console.log("🔓 FINALLY BLOCK - Resetting isCompletingRide to FALSE");
     setIsCompletingRide(false);
     console.log("✅ isCompletingRide reset to FALSE");
@@ -1860,15 +1792,15 @@ const completeRide = useCallback(async () => {
   location,
   otpVerificationLocation,
   stopNavigation,
-  clearMapData,
+  hideRiderDetails,
   socket,
   driverId,
   userData,
   haversine,
-  hideRiderDetails,
   saveRideState,
   isCompletingRide
 ]);
+
 
 
 
