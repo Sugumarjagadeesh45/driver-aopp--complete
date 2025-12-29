@@ -62,7 +62,7 @@ const ReferScreen: React.FC<ReferScreenProps> = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <LinearGradient
-        colors={['#9b59b6', '#8e44ad', '#7d3c98']}
+        colors={['#2ecc71', '#27ae60', '#229954']}
         style={styles.header}
       >
         <TouchableOpacity
@@ -78,7 +78,7 @@ const ReferScreen: React.FC<ReferScreenProps> = ({ navigation }) => {
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Referral Card */}
         <LinearGradient
-          colors={['#9b59b6', '#8e44ad']}
+          colors={['#2ecc71', '#27ae60']}
           style={styles.referralCard}
         >
           <MaterialIcons name="card-giftcard" size={60} color="#fff" />
@@ -92,13 +92,13 @@ const ReferScreen: React.FC<ReferScreenProps> = ({ navigation }) => {
             <View style={styles.codeBox}>
               <Text style={styles.code}>{referralCode || 'LOADING...'}</Text>
               <TouchableOpacity onPress={handleCopyCode} style={styles.copyButton}>
-                <MaterialIcons name="content-copy" size={20} color="#9b59b6" />
+                <MaterialIcons name="content-copy" size={20} color="#2ecc71" />
               </TouchableOpacity>
             </View>
           </View>
 
           <TouchableOpacity style={styles.shareButton} onPress={handleShare}>
-            <MaterialIcons name="share" size={20} color="#9b59b6" />
+            <MaterialIcons name="share" size={20} color="#2ecc71" />
             <Text style={styles.shareButtonText}>Share with Friends</Text>
           </TouchableOpacity>
         </LinearGradient>
@@ -106,7 +106,7 @@ const ReferScreen: React.FC<ReferScreenProps> = ({ navigation }) => {
         {/* Stats */}
         <View style={styles.statsContainer}>
           <View style={styles.statCard}>
-            <MaterialIcons name="people" size={32} color="#9b59b6" />
+            <MaterialIcons name="people" size={32} color="#2ecc71" />
             <Text style={styles.statValue}>{referralStats.totalReferrals}</Text>
             <Text style={styles.statLabel}>Total Referrals</Text>
           </View>
@@ -251,7 +251,7 @@ const styles = StyleSheet.create({
   code: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#9b59b6',
+    color: '#2ecc71',
     letterSpacing: 2,
   },
   copyButton: {
@@ -271,7 +271,7 @@ const styles = StyleSheet.create({
   shareButtonText: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#9b59b6',
+    color: '#2ecc71',
     marginLeft: 8,
   },
   statsContainer: {
@@ -329,7 +329,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#9b59b6',
+    backgroundColor: '#2ecc71',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 15,

@@ -21,6 +21,7 @@ interface WalletScreenProps {
 interface Transaction {
   id: string;
   type: 'credit' | 'debit';
+  category: 'incentive' | 'wallet_added' | 'wallet_withdrawn' | 'ride_earning';
   amount: number;
   description: string;
   date: string;
@@ -100,6 +101,36 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
     });
   };
 
+  const getTransactionIcon = (category: string) => {
+    switch (category) {
+      case 'incentive':
+        return 'card-giftcard';
+      case 'wallet_added':
+        return 'add-circle';
+      case 'wallet_withdrawn':
+        return 'remove-circle';
+      case 'ride_earning':
+        return 'local-taxi';
+      default:
+        return 'payment';
+    }
+  };
+
+  const getTransactionLabel = (category: string) => {
+    switch (category) {
+      case 'incentive':
+        return 'Incentive Amount';
+      case 'wallet_added':
+        return 'Wallet Added';
+      case 'wallet_withdrawn':
+        return 'Wallet Withdrawn';
+      case 'ride_earning':
+        return 'Ride Earning';
+      default:
+        return 'Transaction';
+    }
+  };
+
   const TransactionItem = ({ transaction }: { transaction: Transaction }) => (
     <View style={styles.transactionItem}>
       <View
@@ -112,14 +143,14 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
         ]}
       >
         <MaterialIcons
-          name={transaction.type === 'credit' ? 'arrow-downward' : 'arrow-upward'}
+          name={getTransactionIcon(transaction.category)}
           size={20}
           color={transaction.type === 'credit' ? '#27ae60' : '#e74c3c'}
         />
       </View>
       <View style={styles.transactionDetails}>
         <Text style={styles.transactionDescription}>
-          {transaction.description}
+          {getTransactionLabel(transaction.category)}
         </Text>
         <Text style={styles.transactionDate}>{formatDate(transaction.date)}</Text>
       </View>
@@ -167,7 +198,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
     <View style={styles.container}>
       {/* Header */}
       <LinearGradient
-        colors={['#f39c12', '#e67e22', '#d35400']}
+        colors={['#2ecc71', '#27ae60', '#229954']}
         style={styles.header}
       >
         <TouchableOpacity
@@ -189,7 +220,7 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
       >
         {/* Balance Card */}
         <LinearGradient
-          colors={['#f39c12', '#e67e22']}
+          colors={['#2ecc71', '#27ae60']}
           style={styles.balanceCard}
         >
           <View style={styles.balanceHeader}>
@@ -200,27 +231,37 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
             {formatCurrency(walletData.balance)}
           </Text>
           <TouchableOpacity style={styles.withdrawButton}>
-            <MaterialIcons name="upload" size={20} color="#f39c12" />
+            <MaterialIcons name="upload" size={20} color="#2ecc71" />
             <Text style={styles.withdrawButtonText}>Withdraw</Text>
           </TouchableOpacity>
         </LinearGradient>
 
-        {/* Stats Cards */}
+        {/* Stats Card - Total Earnings Only */}
         <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <MaterialIcons name="trending-up" size={28} color="#27ae60" />
+          <View style={styles.statCardFull}>
+            <MaterialIcons name="trending-up" size={32} color="#27ae60" />
             <Text style={styles.statValue}>
               {formatCurrency(walletData.totalEarnings)}
             </Text>
             <Text style={styles.statLabel}>Total Earnings</Text>
           </View>
-          <View style={styles.statCard}>
-            <MaterialIcons name="pending" size={28} color="#f39c12" />
-            <Text style={styles.statValue}>
-              {formatCurrency(walletData.pendingAmount)}
-            </Text>
-            <Text style={styles.statLabel}>Pending</Text>
-          </View>
+        </View>
+
+        {/* Add Wallet Amount Button */}
+        <View style={styles.addWalletSection}>
+          <TouchableOpacity style={styles.addWalletButton} onPress={() => {
+            Alert.alert('Recharge Wallet', 'Payment integration coming soon!');
+          }}>
+            <LinearGradient
+              colors={['#2ecc71', '#27ae60']}
+              style={styles.addWalletGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+            >
+              <MaterialIcons name="add-circle" size={24} color="#fff" />
+              <Text style={styles.addWalletText}>Add Wallet Amount - Recharge Now</Text>
+            </LinearGradient>
+          </TouchableOpacity>
         </View>
 
         {/* Transactions */}
@@ -326,11 +367,37 @@ const styles = StyleSheet.create({
   withdrawButtonText: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#f39c12',
+    color: '#2ecc71',
     marginLeft: 8,
   },
-  statsContainer: {
+  addWalletSection: {
+    paddingHorizontal: 15,
+    marginBottom: 20,
+  },
+  addWalletButton: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    elevation: 5,
+    shadowColor: '#2ecc71',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  addWalletGradient: {
+    height: 56,
     flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  addWalletText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 10,
+    letterSpacing: 0.5,
+  },
+  statsContainer: {
     paddingHorizontal: 15,
     marginBottom: 20,
   },
@@ -340,6 +407,17 @@ const styles = StyleSheet.create({
     padding: 20,
     borderRadius: 15,
     marginHorizontal: 5,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  statCardFull: {
+    backgroundColor: '#fff',
+    padding: 20,
+    borderRadius: 15,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },

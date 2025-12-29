@@ -2851,16 +2851,8 @@ const handleBillModalClose = useCallback(() => {
         </View>
       )}
       
-      {/* Logout Button */}
-      {!ride && (
-        <TouchableOpacity
-          style={[styles.button, styles.logoutButton]}
-          onPress={handleLogout}
-        >
-          <MaterialIcons name="logout" size={20} color="#fff" />
-          <Text style={styles.btnText}>Logout</Text>
-        </TouchableOpacity>
-      )}
+
+
       
       {/* OTP Modal */}
       <Modal visible={otpModalVisible} transparent animationType="slide">

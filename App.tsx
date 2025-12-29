@@ -126,6 +126,7 @@ import Screen1 from "./src/Screen1";
 import ActiveRideScreen from "./src/ActiveRideScreen";
 import RejectRideScreen from "./src/RejectRideScreen";
 import MenuScreen from "./src/MenuScreen";
+import ProfileScreen from "./src/ProfileScreen";
 import WalletScreen from "./src/WalletScreen";
 import RideHistoryScreen from "./src/RideHistoryScreen";
 import SettingsScreen from "./src/SettingsScreen";
@@ -139,6 +140,7 @@ export type RootStackParamList = {
   ActiveRideScreen: { rideId: string };
   RejectRideScreen: { rideId: string };
   Menu: undefined;
+  Profile: undefined;
   Wallet: undefined;
   RideHistory: undefined;
   Settings: undefined;
@@ -237,6 +239,11 @@ export default function App() {
         <Stack.Screen
           name="Menu"
           component={MenuScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Profile"
+          component={ProfileScreen}
           options={{ headerShown: false }}
         />
         <Stack.Screen

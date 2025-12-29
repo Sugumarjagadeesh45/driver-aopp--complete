@@ -190,7 +190,7 @@ const RideHistoryScreen: React.FC<RideHistoryScreenProps> = ({ navigation }) => 
     <View style={styles.container}>
       {/* Header */}
       <LinearGradient
-        colors={['#3498db', '#2980b9', '#21618c']}
+        colors={['#2ecc71', '#27ae60', '#229954']}
         style={styles.header}
       >
         <TouchableOpacity

@@ -50,7 +50,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <LinearGradient
-        colors={['#95a5a6', '#7f8c8d', '#626567']}
+        colors={['#2ecc71', '#27ae60', '#229954']}
         style={styles.header}
       >
         <TouchableOpacity

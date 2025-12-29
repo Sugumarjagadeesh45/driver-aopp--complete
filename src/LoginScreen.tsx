@@ -152,15 +152,41 @@ const LoginScreen = () => {
           setResendCountdown(30);
           
         } else {
-          Alert.alert('Access Denied', 'Driver not found. Please contact admin.');
+          Alert.alert(
+            'Authentication Failed',
+            'This mobile number is not registered in our system. Please contact our admin at eazygo2026@gmail.com',
+            [
+              {
+                text: 'Contact Admin',
+                onPress: () => {
+                  const { Linking } = require('react-native');
+                  Linking.openURL('mailto:eazygo2026@gmail.com?subject=Driver Registration Issue');
+                }
+              },
+              { text: 'OK', style: 'cancel' }
+            ]
+          );
         }
-        
+
       } catch (backendError: any) {
         console.error('❌ Backend check error:', backendError.message);
         console.error('❌ Status Code:', backendError.response?.status);
-        
+
         if (backendError.response?.status === 404) {
-          Alert.alert('Not Registered', 'This number is not registered as a driver.');
+          Alert.alert(
+            'Authentication Failed',
+            'This mobile number is not registered in our system. Please contact our admin at eazygo2026@gmail.com',
+            [
+              {
+                text: 'Contact Admin',
+                onPress: () => {
+                  const { Linking } = require('react-native');
+                  Linking.openURL('mailto:eazygo2026@gmail.com?subject=Driver Registration Issue');
+                }
+              },
+              { text: 'OK', style: 'cancel' }
+            ]
+          );
         } else if (backendError.response?.status === 401) {
            // This handles the specific error you were seeing
            Alert.alert('Server Config Error', 'Server returned 401. Please check backend middleware order.');

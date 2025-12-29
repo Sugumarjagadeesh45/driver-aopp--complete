@@ -171,6 +171,13 @@ const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
         {/* Menu Items */}
         <View style={styles.menuSection}>
           <MenuItem
+            icon="person"
+            title="Profile"
+            onPress={() => navigation.navigate('Profile')}
+            color="#2ecc71"
+          />
+
+          <MenuItem
             icon="account-balance-wallet"
             title={`Wallet - ₹${walletBalance.toFixed(2)}`}
             onPress={() => navigation.navigate('Wallet')}
@@ -196,7 +203,7 @@ const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
             iconFamily="FontAwesome5"
             title="Refer & Earn"
             onPress={() => navigation.navigate('Refer')}
-            color="#9b59b6"
+            color="#2ecc71"
           />
 
           <MenuItem
