@@ -140,7 +140,6 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
   const fadeAnim = useRef(new Animated.Value(1)).current;  // Start at 1 for maximized
 
   // Hamburger Menu States
-  const [menuVisible, setMenuVisible] = useState(false);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const [driverProfile, setDriverProfile] = useState({
     name: '',
@@ -450,9 +449,8 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
     loadDriverProfile();
   }, [driverName]);
 
-  // Hamburger Menu Handler
+  // Profile Handler
   const handleOpenProfile = () => {
-    setMenuVisible(false);
     setProfileModalVisible(true);
   };
 
@@ -1380,27 +1378,39 @@ const startNavigation = useCallback(async (startLocation: LocationType) => {
   const handleLogout = async () => {
     try {
       console.log("🚪 Initiating logout for driver:", driverId);
-     
-      if (ride) {
+
+      // Check if driver is currently on a ride
+      if (ride && (rideStatus === "accepted" || rideStatus === "started" || rideStatus === "onTheWay")) {
         Alert.alert(
-          "Active Ride",
-          "Please complete your current ride before logging out.",
-          [{ text: "OK" }]
+          "⚠️ Cannot Logout",
+          "You are currently on a ride, so you cannot log out now.\nPlease complete your ride before logging out.",
+          [{ text: "OK", style: "cancel" }]
         );
         return;
       }
-      
+
       // Stop background tracking
       stopBackgroundLocationTracking();
-      
-      await api.post("/drivers/logout");
+
+      // Try to notify backend, but don't block logout if it fails
+      try {
+        await api.post("/drivers/logout");
+        console.log("✅ Backend logout successful");
+      } catch (backendErr) {
+        console.log("⚠️ Backend logout failed, but continuing with app logout:", backendErr);
+      }
+
+      // Clear local storage
       await AsyncStorage.clear();
       console.log("✅ AsyncStorage cleared");
-      
+
+      // Disconnect socket
       if (socket) {
         socket.disconnect();
+        console.log("✅ Socket disconnected");
       }
-      
+
+      // Navigate to login screen
       navigation.replace("LoginScreen");
       console.log("🧭 Navigated to LoginScreen");
     } catch (err) {
@@ -2618,59 +2628,21 @@ const handleBillModalClose = useCallback(() => {
         )}
       </MapView>
 
-      {/* Hamburger Menu Button */}
+      {/* Menu Button - Top Left */}
       <TouchableOpacity
-        style={styles.hamburgerButton}
-        onPress={() => setMenuVisible(true)}
+        style={styles.menuButton}
+        onPress={() => navigation.navigate('Menu')}
       >
         <MaterialIcons name="menu" size={28} color="#fff" />
       </TouchableOpacity>
 
-      {/* Hamburger Menu Modal */}
-      <Modal
-        visible={menuVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setMenuVisible(false)}
+      {/* Logout Button - Top Right */}
+      <TouchableOpacity
+        style={styles.logoutButton}
+        onPress={handleLogout}
       >
-        <TouchableOpacity
-          style={styles.menuOverlay}
-          activeOpacity={1}
-          onPress={() => setMenuVisible(false)}
-        >
-          <View style={styles.menuContainer}>
-            <View style={styles.menuHeader}>
-              <Text style={styles.menuTitle}>Menu</Text>
-              <TouchableOpacity onPress={() => setMenuVisible(false)}>
-                <MaterialIcons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </View>
-
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={handleOpenProfile}
-            >
-              <MaterialIcons name="person" size={24} color="#2ecc71" />
-              <Text style={styles.menuItemText}>Profile</Text>
-              <MaterialIcons name="chevron-right" size={24} color="#999" />
-            </TouchableOpacity>
-
-            <View style={styles.menuDivider} />
-
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                setMenuVisible(false);
-                handleLogout();
-              }}
-            >
-              <MaterialIcons name="logout" size={24} color="#e74c3c" />
-              <Text style={[styles.menuItemText, { color: '#e74c3c' }]}>Logout</Text>
-              <MaterialIcons name="chevron-right" size={24} color="#999" />
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
+        <MaterialIcons name="logout" size={24} color="#fff" />
+      </TouchableOpacity>
 
       {/* Profile Modal */}
       <Modal
@@ -2852,48 +2824,7 @@ const handleBillModalClose = useCallback(() => {
           </TouchableOpacity>
         </View>
       )}
-      
-      <View style={styles.statusContainer}>
-        <View style={styles.statusRow}>
-          <View
-            style={[
-              styles.statusIndicator,
-              { backgroundColor: socketConnected ? "#4caf50" : "#f44336" },
-            ]}
-          />
-          <Text style={styles.statusText}>
-            {socketConnected ? "Connected" : "Disconnected"}
-          </Text>
-          <View
-            style={[
-              styles.statusIndicator,
-              {
-                backgroundColor:
-                  driverStatus === "online"
-                    ? "#4caf50"
-                    : driverStatus === "onRide"
-                    ? "#ff9800"
-                    : "#f44336",
-              },
-            ]}
-          />
-          <Text style={styles.statusText}>{driverStatus.toUpperCase()}</Text>
-        </View>
-       
-        {ride && (rideStatus === "accepted" || rideStatus === "started") && userLocation && (
-          <Text style={styles.userLocationText}>
-            🟢 User Live: {userLocation.latitude.toFixed(4)},{" "}
-            {userLocation.longitude.toFixed(4)}
-          </Text>
-        )}
-       
-        {rideStatus === "started" && (
-          <Text style={styles.distanceText}>
-            📏 Distance Travelled: {travelledKm.toFixed(2)} km
-          </Text>
-        )}
-      </View>
-      
+
       {ride && rideStatus === "onTheWay" && (
         <View style={styles.rideActions}>
           <TouchableOpacity
@@ -3303,23 +3234,24 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderRadius: 2,
   },
-  // Online/Offline Toggle Styles - MOVED TO BOTTOM RIGHT
+  // Online/Offline Toggle Styles - CENTER TOP
   onlineToggleContainer: {
     position: "absolute",
-    top: 120,
-    right: 30,
-    left: 'auto',
-    zIndex: 11,
+    top: 45,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    zIndex: 5,
   },
   onlineToggleButton: {
-    padding: 16,
-    borderRadius: 12,
+    padding: 14,
+    borderRadius: 30,
     elevation: 6,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.3,
     shadowRadius: 6,
-    minWidth: 330,
+    width: 180,
   },
   onlineButton: {
     backgroundColor: "#4caf50",
@@ -3745,8 +3677,8 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#FFFFFF",
   },
-  // Hamburger Menu Styles
-  hamburgerButton: {
+  // Top Navigation Buttons
+  menuButton: {
     position: 'absolute',
     top: 50,
     left: 20,
@@ -3763,52 +3695,22 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     zIndex: 10,
   },
-  menuOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  menuContainer: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingVertical: 20,
-    paddingHorizontal: 16,
-    maxHeight: '50%',
-  },
-  menuHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  logoutButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#e74c3c',
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
-    paddingBottom: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
-  },
-  menuTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#333',
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    marginBottom: 8,
-  },
-  menuItemText: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#333',
-    marginLeft: 16,
-  },
-  menuDivider: {
-    height: 1,
-    backgroundColor: '#e0e0e0',
-    marginVertical: 8,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    zIndex: 10,
   },
   // Profile Modal Styles
   profileModalOverlay: {

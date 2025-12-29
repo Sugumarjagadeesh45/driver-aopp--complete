@@ -125,14 +125,24 @@ import LoginScreen from "./src/LoginScreen";
 import Screen1 from "./src/Screen1";
 import ActiveRideScreen from "./src/ActiveRideScreen";
 import RejectRideScreen from "./src/RejectRideScreen";
+import MenuScreen from "./src/MenuScreen";
+import WalletScreen from "./src/WalletScreen";
+import RideHistoryScreen from "./src/RideHistoryScreen";
+import SettingsScreen from "./src/SettingsScreen";
+import ReferScreen from "./src/ReferScreen";
 import 'react-native-get-random-values';
 import { v4 as uuidv4 } from 'uuid';
 
 export type RootStackParamList = {
   LoginScreen: undefined;
-  Screen1: { driverInfo?: any }; // Updated to accept driverInfo
+  Screen1: { driverInfo?: any };
   ActiveRideScreen: { rideId: string };
   RejectRideScreen: { rideId: string };
+  Menu: undefined;
+  Wallet: undefined;
+  RideHistory: undefined;
+  Settings: undefined;
+  Refer: undefined;
 };
 
 const id: string = uuidv4();
@@ -223,6 +233,31 @@ export default function App() {
           name="RejectRideScreen"
           component={RejectRideScreen}
           options={{ title: "Reject Ride" }}
+        />
+        <Stack.Screen
+          name="Menu"
+          component={MenuScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Wallet"
+          component={WalletScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="RideHistory"
+          component={RideHistoryScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Settings"
+          component={SettingsScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="Refer"
+          component={ReferScreen}
+          options={{ headerShown: false }}
         />
       </Stack.Navigator>
     </NavigationContainer>
