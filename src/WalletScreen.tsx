@@ -21,7 +21,7 @@ interface WalletScreenProps {
 interface Transaction {
   id: string;
   type: 'credit' | 'debit';
-  category: 'incentive' | 'wallet_added' | 'wallet_withdrawn' | 'ride_earning';
+  category: 'incentive' | 'wallet_added' | 'wallet_withdrawn' | 'ride_earning' | 'working_hours_deduction';
   amount: number;
   description: string;
   date: string;
@@ -111,6 +111,8 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
         return 'remove-circle';
       case 'ride_earning':
         return 'local-taxi';
+      case 'working_hours_deduction':
+        return 'access-time';
       default:
         return 'payment';
     }
@@ -126,6 +128,8 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
         return 'Wallet Withdrawn';
       case 'ride_earning':
         return 'Ride Earning';
+      case 'working_hours_deduction':
+        return 'Extended Hours Fee';
       default:
         return 'Transaction';
     }

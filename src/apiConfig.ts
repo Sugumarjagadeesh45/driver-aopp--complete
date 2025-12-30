@@ -1,30 +1,34 @@
-// -----------------------------------------
-// 🌍 LIVE SERVER CONFIGURATION
-// -----------------------------------------
+import { Platform } from 'react-native';
 
-// Base URL for API calls 
-// (Note: Preserved the '/api' suffix as seen in your original driver code)
-export const API_BASE = 'https://taxi.webase.co.in/api';
+// --- Select URLs based on environment ---
+// Set to `true` for local development, `false` for production
+const IS_DEVELOPMENT = true;
 
-// Base URL for Socket.io
-export const SOCKET_URL = 'https://taxi.webase.co.in';
+// For Android Emulator, 'localhost' of the host machine is 10.0.2.2
+const LOCAL_API_URL_ANDROID = 'http://10.0.2.2:5001/api';
+const LOCAL_SOCKET_URL_ANDROID = 'http://10.0.2.2:5001';
 
-console.log("🚀 App configured for LIVE SERVER:", API_BASE);
+// For iOS Simulator, 'localhost' works directly
+const LOCAL_API_URL_IOS = 'http://localhost:5001/api';
+const LOCAL_SOCKET_URL_IOS = 'http://localhost:5001';
 
+const PROD_API_URL = 'https://taxi.webase.co.in/api';
+const PROD_SOCKET_URL = 'https://taxi.webase.co.in';
 
+export const API_BASE = IS_DEVELOPMENT
+  ? Platform.select({
+      android: LOCAL_API_URL_ANDROID,
+      ios: LOCAL_API_URL_IOS,
+    })
+  : PROD_API_URL;
 
+export const SOCKET_URL = IS_DEVELOPMENT
+  ? Platform.select({
+      android: LOCAL_SOCKET_URL_ANDROID,
+      ios: LOCAL_SOCKET_URL_IOS,
+    })
+  : PROD_SOCKET_URL;
 
-// import { Platform } from "react-native";
-
-
-// const LOCAL_IP = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
-// const PORT = '5001';
-
-// // Base URL for API calls (e.g., axios)
-// export const API_BASE = `http://${LOCAL_IP}:${PORT}/api`;
-
-// // Base URL for Socket.io
-// export const SOCKET_URL = `http://${LOCAL_IP}:${PORT}`;
-
-// console.log("🚀 App configured for LOCALHOST:", API_BASE);// // Use NGROK URL for LOCALHOST MODE
-
+console.log(`🚀 App configured for: ${IS_DEVELOPMENT ? 'LOCAL SERVER' : 'LIVE SERVER'}`);
+console.log(`- API Base: ${API_BASE}`);
+console.log(`- Socket URL: ${SOCKET_URL}`);

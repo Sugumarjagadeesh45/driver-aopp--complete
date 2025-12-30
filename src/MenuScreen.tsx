@@ -14,6 +14,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import FontAwesome5 from 'react-native-vector-icons/FontAwesome5';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE } from './apiConfig';
 
 interface MenuScreenProps {
   navigation: any;
@@ -35,11 +36,48 @@ const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
   const [driverInfo, setDriverInfo] = useState<DriverInfo | null>(null);
   const [walletBalance, setWalletBalance] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+  const [workingHoursStatus, setWorkingHoursStatus] = useState({
+    active: false,
+    remainingTime: '12:00:00',
+    remainingSeconds: 0,
+    assignedHours: 12,
+  });
   const APP_VERSION = '1.0.0';
 
   useEffect(() => {
     loadDriverData();
   }, []);
+
+  // ✅ Real-time timer update (every second)
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+
+    if (workingHoursStatus.active && workingHoursStatus.remainingSeconds > 0) {
+      interval = setInterval(() => {
+        setWorkingHoursStatus((prev) => {
+          const newSeconds = prev.remainingSeconds - 1;
+          if (newSeconds <= 0) {
+            return { ...prev, active: false, remainingSeconds: 0, remainingTime: '00:00:00' };
+          }
+
+          const hours = Math.floor(newSeconds / 3600);
+          const minutes = Math.floor((newSeconds % 3600) / 60);
+          const seconds = newSeconds % 60;
+          const formatted = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+          return {
+            ...prev,
+            remainingSeconds: newSeconds,
+            remainingTime: formatted,
+          };
+        });
+      }, 1000); // Update every second
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [workingHoursStatus.active, workingHoursStatus.remainingSeconds]);
 
   const loadDriverData = async () => {
     try {
@@ -55,6 +93,23 @@ const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
         // Use wallet balance from login response stored in AsyncStorage
         if (info.wallet !== undefined) {
           setWalletBalance(info.wallet);
+        }
+
+        // Fetch working hours status
+        try {
+          const response = await fetch(`${API_BASE}/drivers/working-hours/status/${info.driverId}`);
+          const result = await response.json();
+
+          if (result.success && result.timerActive) {
+            setWorkingHoursStatus({
+              active: true,
+              remainingTime: result.formattedTime || '12:00:00',
+              remainingSeconds: result.remainingSeconds || 43200, // Default 12 hours
+              assignedHours: result.assignedHours || 12,
+            });
+          }
+        } catch (error) {
+          console.log('Working hours status not available:', error);
         }
       }
     } catch (error) {
@@ -167,6 +222,29 @@ const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
             </View>
           )}
         </View>
+
+        {/* Working Hours Status Banner */}
+        {workingHoursStatus.active && (
+          <View style={styles.workingHoursBanner}>
+            <LinearGradient
+              colors={['#3498db', '#2980b9']}
+              style={styles.workingHoursGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+            >
+              <View style={styles.workingHoursIcon}>
+                <MaterialIcons name="access-time" size={28} color="#fff" />
+              </View>
+              <View style={styles.workingHoursContent}>
+                <Text style={styles.workingHoursLabel}>Working Hours Remaining</Text>
+                <Text style={styles.workingHoursTime}>{workingHoursStatus.remainingTime}</Text>
+              </View>
+              <View style={styles.workingHoursBadge}>
+                <Text style={styles.workingHoursBadgeText}>{workingHoursStatus.assignedHours}h</Text>
+              </View>
+            </LinearGradient>
+          </View>
+        )}
 
         {/* Menu Items */}
         <View style={styles.menuSection}>
@@ -366,6 +444,58 @@ const styles = StyleSheet.create({
   footerCopyright: {
     fontSize: 13,
     color: '#bdc3c7',
+  },
+  workingHoursBanner: {
+    paddingHorizontal: 15,
+    marginBottom: 20,
+  },
+  workingHoursGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 16,
+    shadowColor: '#3498db',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  workingHoursIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  workingHoursContent: {
+    flex: 1,
+  },
+  workingHoursLabel: {
+    fontSize: 12,
+    color: '#fff',
+    opacity: 0.9,
+    marginBottom: 4,
+  },
+  workingHoursTime: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+    letterSpacing: 1,
+  },
+  workingHoursBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  workingHoursBadgeText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
   },
 });
 

@@ -26,15 +26,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/FontAwesome';
 import { RootStackParamList } from '../App';
+import { API_BASE } from './apiConfig';
 
 const { width, height } = Dimensions.get('window');
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 const auth = getAuth(getApp());
-
-// ✅ LIVE SERVER URL
-const API_URL = 'https://taxi.webase.co.in/api';
 
 const LoginScreen = () => {
   const [mobileNumber, setMobileNumber] = useState('');
@@ -120,7 +118,7 @@ const LoginScreen = () => {
         // 🔴 FIX: Changed endpoint to /auth/request-driver-otp
         // This avoids the 401 Unauthorized error in driverRoutes
         const checkResponse = await axios.post(
-          `${API_URL}/auth/request-driver-otp`, 
+          `${API_BASE}/auth/request-driver-otp`, 
           { phoneNumber: cleanPhone },
           { 
             timeout: 10000,
@@ -228,7 +226,7 @@ const LoginScreen = () => {
         // 🔴 FIX: Changed endpoint to /auth/get-driver-info
         // Using auth routes ensures we don't hit the 401 protection
         const response = await axios.post(
-          `${API_URL}/auth/get-driver-info`, 
+          `${API_BASE}/auth/get-driver-info`, 
           { phoneNumber: cleanPhone },
           { timeout: 15000 }
         );

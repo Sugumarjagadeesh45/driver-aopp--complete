@@ -128,7 +128,36 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
   // FCM Notification states
   const [hasNotificationPermission, setHasNotificationPermission] = useState(false);
   const [isBackgroundMode, setIsBackgroundMode] = useState(false);
-  
+
+  // ========================================
+  // WORKING HOURS TIMER STATES - START
+  // ========================================
+  const [workingHoursTimer, setWorkingHoursTimer] = useState({
+    active: false,
+    remainingSeconds: 0,
+    formattedTime: '12:00:00',
+    warningsIssued: 0,
+    walletDeducted: false,
+    totalHours: 12,
+  });
+
+  const [showWorkingHoursWarning, setShowWorkingHoursWarning] = useState(false);
+  const [currentWarning, setCurrentWarning] = useState({
+    number: 0,
+    message: '',
+    remainingTime: '',
+  });
+
+  const [showOfflineConfirmation, setShowOfflineConfirmation] = useState(false);
+  const [offlineStep, setOfflineStep] = useState<'warning' | 'verification'>('warning'); // Two-step flow
+  const [driverIdConfirmation, setDriverIdConfirmation] = useState('');
+
+  const timerPollingInterval = useRef<NodeJS.Timeout | null>(null);
+  const onlineStatusChanging = useRef(false);
+  // ========================================
+  // WORKING HOURS TIMER STATES - END
+  // ========================================
+
   // Animation values
   const driverMarkerAnimation = useRef(new Animated.Value(1)).current;
   const polylineAnimation = useRef(new Animated.Value(0)).current;
@@ -158,6 +187,15 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
   const [showRideTakenAlert, setShowRideTakenAlert] = useState(false);
   const rideTakenAlertTimeout = useRef<NodeJS.Timeout | null>(null);
   const [alertProgress, setAlertProgress] = useState(new Animated.Value(1));
+
+  // Professional Custom Alert State
+  const [customAlert, setCustomAlert] = useState({
+    visible: false,
+    type: 'info' as 'success' | 'error' | 'warning' | 'info',
+    title: '',
+    message: '',
+    buttons: [] as Array<{text: string, onPress?: () => void, style?: 'default' | 'cancel' | 'destructive'}>
+  });
   
   // Socket import
   let socket: any = null;
@@ -251,7 +289,27 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
       showRiderDetails();
     }
   };
-  
+
+  // Professional Custom Alert Function
+  const showCustomAlert = (
+    type: 'success' | 'error' | 'warning' | 'info',
+    title: string,
+    message: string,
+    buttons: Array<{text: string, onPress?: () => void, style?: 'default' | 'cancel' | 'destructive'}> = [{text: 'OK'}]
+  ) => {
+    setCustomAlert({
+      visible: true,
+      type,
+      title,
+      message,
+      buttons
+    });
+  };
+
+  const hideCustomAlert = () => {
+    setCustomAlert(prev => ({...prev, visible: false}));
+  };
+
   // Haversine distance function
   const haversine = (start: LocationType, end: LocationType) => {
     const R = 6371; // Earth's radius in kilometers
@@ -502,7 +560,7 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
          
           // Listen for ride requests
           NotificationService.on('rideRequest', handleNotificationRideRequest);
-         
+
           // Listen for token refresh
           NotificationService.on('tokenRefresh', async (newToken) => {
             console.log('🔄 FCM token refreshed, updating server...');
@@ -510,7 +568,17 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
               await sendFCMTokenToServer(newToken);
             }
           });
-         
+
+          // ✅ Listen for working hours warnings
+          NotificationService.on('workingHoursWarning', handleWorkingHoursWarning);
+
+          // ✅ Listen for auto-stop
+          NotificationService.on('autoStop', handleAutoStop);
+
+          // ✅ Listen for notification action buttons
+          NotificationService.on('continueWorking', handlePurchaseExtendedHours);
+          NotificationService.on('skipWarning', handleSkipWarning);
+
           setHasNotificationPermission(true);
         } else {
           console.log('❌ Notification system initialization failed');
@@ -531,6 +599,16 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
     return () => {
       // Cleanup
       NotificationService.off('rideRequest', handleNotificationRideRequest);
+      NotificationService.off('workingHoursWarning', handleWorkingHoursWarning);
+      NotificationService.off('autoStop', handleAutoStop);
+      NotificationService.off('continueWorking', handlePurchaseExtendedHours);
+      NotificationService.off('skipWarning', handleSkipWarning);
+
+      // Cleanup timer polling
+      if (timerPollingInterval.current) {
+        clearInterval(timerPollingInterval.current);
+        timerPollingInterval.current = null;
+      }
     };
   }, [driverStatus, driverId, hasNotificationPermission]);
   
@@ -684,46 +762,349 @@ const handleNotificationRideRequest = useCallback(async (data: any) => {
   }
 }, [isDriverOnline]);
 
+// ========================================
+// WORKING HOURS API FUNCTIONS - START
+// ========================================
 
+/**
+ * Format seconds to HH:MM:SS
+ */
+const formatTime = (seconds: number): string => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+};
 
+/**
+ * Start Working Hours Timer
+ */
+const startWorkingHoursTimer = useCallback(async () => {
+  try {
+    console.log('⏱️ Starting working hours timer for driver:', driverId);
 
+    const response = await fetch(`${API_BASE}/driver/working-hours/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driverId })
+    });
 
+    const result = await response.json();
+
+    if (result.success) {
+      console.log('✅ Working hours timer started:', result);
+      startTimerPolling();
+      return true;
+    } else {
+      console.warn('⚠️ Timer start failed:', result.message);
+      return false;
+    }
+  } catch (error) {
+    console.error('❌ Failed to start working hours timer:', error);
+    return false;
+  }
+}, [driverId]);
+
+/**
+ * Stop Working Hours Timer
+ */
+const stopWorkingHoursTimer = useCallback(async () => {
+  try {
+    console.log('🛑 Stopping working hours timer for driver:', driverId);
+
+    // Stop polling first
+    if (timerPollingInterval.current) {
+      clearInterval(timerPollingInterval.current);
+      timerPollingInterval.current = null;
+    }
+
+    const response = await fetch(`${API_BASE}/driver/working-hours/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driverId })
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      console.log('✅ Working hours timer stopped');
+      setWorkingHoursTimer({
+        active: false,
+        remainingSeconds: 0,
+        formattedTime: '12:00:00',
+        warningsIssued: 0,
+        walletDeducted: false,
+        totalHours: 12,
+      });
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('❌ Failed to stop working hours timer:', error);
+    return false;
+  }
+}, [driverId]);
+
+/**
+ * Start Timer Polling (every 5 seconds)
+ */
+const startTimerPolling = useCallback(() => {
+  console.log('🔄 Starting timer status polling...');
+
+  if (timerPollingInterval.current) {
+    clearInterval(timerPollingInterval.current);
+  }
+
+  // Fetch immediately
+  fetchTimerStatus();
+
+  // Then poll every 5 seconds
+  timerPollingInterval.current = setInterval(() => {
+    fetchTimerStatus();
+  }, 5000);
+}, []);
+
+/**
+ * Fetch Timer Status from Backend
+ */
+const fetchTimerStatus = useCallback(async () => {
+  try {
+    const response = await fetch(
+      `${API_BASE}/driver/working-hours/status/${driverId}`
+    );
+    const result = await response.json();
+
+    if (result.success) {
+      setWorkingHoursTimer({
+        active: result.timerActive || false,
+        remainingSeconds: result.remainingSeconds || 0,
+        formattedTime: result.formattedTime || '12:00:00',
+        warningsIssued: result.warningsIssued || 0,
+        walletDeducted: result.walletDeducted || false,
+        totalHours: Math.floor((result.remainingSeconds || 0) / 3600),
+      });
+
+      console.log(`⏱️ Timer Update: ${result.formattedTime} | Warnings: ${result.warningsIssued}`);
+
+      // If timer is not active, stop polling
+      if (!result.timerActive && timerPollingInterval.current) {
+        clearInterval(timerPollingInterval.current);
+        timerPollingInterval.current = null;
+        console.log('⏸️ Timer inactive, stopped polling');
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error fetching timer status:', error);
+  }
+}, [driverId]);
+
+/**
+ * Purchase Extended Hours (₹100 for 12 hours)
+ */
+const handlePurchaseExtendedHours = useCallback(async () => {
+  try {
+    setShowWorkingHoursWarning(false);
+
+    const response = await fetch(`${API_BASE}/driver/working-hours/extend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driverId, additionalHours: 12 })
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      Alert.alert('✅ Success', `₹100 deducted. 12 hours added.\nNew balance: ₹${result.newWalletBalance}`);
+
+      // Refresh timer status
+      fetchTimerStatus();
+    } else {
+      Alert.alert('❌ Failed', result.message || 'Could not purchase extended hours');
+    }
+  } catch (error) {
+    console.error('❌ Error purchasing extended hours:', error);
+    Alert.alert('Error', 'Failed to purchase extended hours');
+  }
+}, [driverId, fetchTimerStatus]);
+
+/**
+ * Skip Warning
+ */
+const handleSkipWarning = useCallback(async () => {
+  try {
+    setShowWorkingHoursWarning(false);
+
+    const response = await fetch(`${API_BASE}/driver/working-hours/skip-warning`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driverId })
+    });
+
+    const result = await response.json();
+
+    if (result.success) {
+      console.log('⏭️ Warning skipped');
+    }
+  } catch (error) {
+    console.error('❌ Error skipping warning:', error);
+  }
+}, [driverId]);
+
+/**
+ * Handle Working Hours Warning (from Socket/Notification)
+ */
+const handleWorkingHoursWarning = useCallback((data: any) => {
+  console.log('⚠️ Working hours warning received:', data);
+
+  setCurrentWarning({
+    number: parseInt(data.warningNumber || '1'),
+    message: data.message || '',
+    remainingTime: formatTime(parseInt(data.remainingSeconds || '0')),
+  });
+
+  setShowWorkingHoursWarning(true);
+}, []);
+
+/**
+ * Handle Auto-Stop (from Socket/Notification)
+ */
+const handleAutoStop = useCallback((data: any) => {
+  console.log('🛑 Auto-stop received:', data);
+
+  Alert.alert(
+    '🛑 Working Hours Expired',
+    'Your working hours have ended. You have been automatically set to OFFLINE.',
+    [{ text: 'OK' }]
+  );
+
+  // Force offline
+  setIsDriverOnline(false);
+  setDriverStatus('offline');
+  stopBackgroundLocationTracking();
+
+  // Stop timer polling
+  if (timerPollingInterval.current) {
+    clearInterval(timerPollingInterval.current);
+    timerPollingInterval.current = null;
+  }
+
+  // Disconnect socket
+  if (socket && socket.connected) {
+    socket.emit('driverOffline', { driverId });
+  }
+}, [driverId, socket, stopBackgroundLocationTracking]);
+
+/**
+ * Go Offline Normally (no confirmation needed)
+ */
+const goOfflineNormally = useCallback(async () => {
+  onlineStatusChanging.current = true;
+
+  console.log('🔴 Going OFFLINE...');
+
+  // Stop working hours timer
+  await stopWorkingHoursTimer();
+
+  setIsDriverOnline(false);
+  setDriverStatus('offline');
+  stopBackgroundLocationTracking();
+
+  if (socket && socket.connected) {
+    socket.emit('driverOffline', { driverId });
+  }
+
+  await AsyncStorage.setItem('driverOnlineStatus', 'offline');
+  console.log('🔴 Driver is now OFFLINE');
+
+  onlineStatusChanging.current = false;
+}, [driverId, socket, stopBackgroundLocationTracking, stopWorkingHoursTimer]);
+
+/**
+ * Handle Manual Offline (with wallet deduction check)
+ */
+const handleManualOfflineRequest = useCallback(async () => {
+  if (onlineStatusChanging.current) return;
+
+  console.log('🔍 DEBUG - Timer State:', workingHoursTimer);
+  console.log('🔍 DEBUG - walletDeducted:', workingHoursTimer.walletDeducted);
+  console.log('🔍 DEBUG - timer active:', workingHoursTimer.active);
+
+  // Check if timer is active (which means ₹100 was deducted)
+  if (workingHoursTimer.active || workingHoursTimer.walletDeducted) {
+    // Show professional two-step modal (warning first, then verification)
+    console.log("Driver requested offline, showing professional warning modal.");
+    setOfflineStep('warning'); // Start with warning step
+    setShowOfflineConfirmation(true);
+  } else {
+    // Normal offline
+    await goOfflineNormally();
+  }
+}, [workingHoursTimer, goOfflineNormally]);
+
+/**
+ * Confirm Offline with Driver ID Verification
+ */
+const confirmOfflineWithVerification = useCallback(async () => {
+  const last4Digits = driverId.slice(-4);
+
+  if (driverIdConfirmation !== last4Digits) {
+    Alert.alert('❌ Incorrect', 'Driver ID verification failed. Please enter the last 4 digits correctly.');
+    return;
+  }
+
+  // Close modal and reset state
+  setShowOfflineConfirmation(false);
+  setDriverIdConfirmation('');
+  setOfflineStep('warning'); // Reset to warning step for next time
+
+  // Go offline
+  await goOfflineNormally();
+}, [driverId, driverIdConfirmation, goOfflineNormally]);
+
+// ========================================
+// WORKING HOURS API FUNCTIONS - END
+// ========================================
 
 // Add this function near the other status functions
 const toggleOnlineStatus = useCallback(async () => {
   if (isDriverOnline) {
-    // Going offline
-    setIsDriverOnline(false);
-    setDriverStatus("offline");
-    stopBackgroundLocationTracking();
-    
-    // Emit offline status to socket
-    if (socket && socket.connected) {
-      socket.emit("driverOffline", { driverId });
-    }
-    
-    await AsyncStorage.setItem("driverOnlineStatus", "offline");
-    console.log("🔴 Driver is now offline");
+    // Going OFFLINE - Check if manual offline needs confirmation
+    await handleManualOfflineRequest();
   } else {
-    // Going online - check location permission first
+    // Going ONLINE
+    console.log('🟢 Going ONLINE...');
+
+    // Check location permission first
     if (!location) {
       Alert.alert("Location Required", "Please enable location services to go online.");
       return;
     }
-    
+
     setIsDriverOnline(true);
     setDriverStatus("online");
     startBackgroundLocationTracking();
-    
+
     // Register with socket
     if (socket && !socket.connected) {
       socket.connect();
     }
-    
+
+    // ✅ START WORKING HOURS TIMER
+    await startWorkingHoursTimer();
+
     await AsyncStorage.setItem("driverOnlineStatus", "online");
-    console.log("🟢 Driver is now online");
+    console.log("🟢 Driver is now ONLINE");
   }
-}, [isDriverOnline, location, driverId, startBackgroundLocationTracking, stopBackgroundLocationTracking]);
+}, [
+  isDriverOnline,
+  location,
+  driverId,
+  socket,
+  startBackgroundLocationTracking,
+  stopBackgroundLocationTracking,
+  startWorkingHoursTimer,
+  handleManualOfflineRequest
+]);
 
 
 
@@ -2448,34 +2829,32 @@ const handleBillModalClose = useCallback(() => {
       {/* Minimized Booking Bar (2 lines) */}
       {renderMinimizedBookingBar()}
 
-      {/* Single Bottom Button - Changes based on ride status */}
-   
-{ride && (rideStatus === "accepted" || rideStatus === "started") && (
-  <TouchableOpacity
-    style={[
-      styles.button, 
-      rideStatus === "accepted" ? styles.startButton : styles.completeButton
-    ]}
-    onPress={() => {
-      console.log("🎯 Complete Ride button pressed");
-      if (rideStatus === "accepted") {
-        setOtpModalVisible(true);
-      } else if (rideStatus === "started") {
-        completeRide(); // Direct call
-      }
-    }}
-    activeOpacity={0.7}
-  >
-    <MaterialIcons 
-      name={rideStatus === "accepted" ? "play-arrow" : "flag"} 
-      size={24} 
-      color="#fff" 
-    />
-    <Text style={styles.btnText}>
-      {rideStatus === "accepted" ? "Enter OTP & Start Ride" : `Complete Ride (${distanceSinceOtp.current.toFixed(2)} km)`}
-    </Text>
-  </TouchableOpacity>
-)}
+      {/* Single Bottom Button - Changes based on ride status */}   
+      {ride && (rideStatus === "accepted" || rideStatus === "started") ? (
+        <TouchableOpacity
+          style={[
+            styles.button, 
+            rideStatus === "accepted" ? styles.startButton : styles.completeButton
+          ]}
+          onPress={() => {
+            if (rideStatus === "accepted") {
+              setOtpModalVisible(true);
+            } else if (rideStatus === "started") {
+              completeRide();
+            }
+          }}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons 
+            name={rideStatus === "accepted" ? "play-arrow" : "flag"} 
+            size={24} 
+            color="#fff" 
+          />
+          <Text style={styles.btnText}>
+            {rideStatus === "accepted" ? "Enter OTP & Start Ride" : `Complete Ride (${distanceSinceOtp.current.toFixed(2)} km)`}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
 
       {/* Ride Taken Alert */}
       {showRideTakenAlert && (
@@ -2498,33 +2877,164 @@ const handleBillModalClose = useCallback(() => {
           </View>
         </View>
       )}
-      
-      {/* Online/Offline Toggle Button - MOVED TO BOTTOM RIGHT */}
-      {!ride && (
-        <View style={styles.onlineToggleContainer}>
-          <TouchableOpacity
-            style={[
-              styles.onlineToggleButton,
-              isDriverOnline ? styles.onlineButton : styles.offlineButton
-            ]}
-            onPress={toggleOnlineStatus}
-          >
-            <View style={styles.toggleContent}>
-              <View style={[
-                styles.toggleIndicator,
-                { backgroundColor: isDriverOnline ? "#4caf50" : "#f44336" }
-              ]} />
-              <Text style={styles.toggleButtonText}>
-                {isDriverOnline ? "🟢 ONLINE" : "🔴 OFFLINE"}
-              </Text>
+
+      {/* Working Hours Timer - Removed (only show in Menu screen) */}
+
+      {/* Working Hours Warning Modal */}
+      <Modal
+        visible={showWorkingHoursWarning}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowWorkingHoursWarning(false)}
+      >
+        <View style={[styles.modalOverlay, styles.warningModalOverlay]}>
+          <View style={styles.workingHoursWarningModal}>
+            <View style={styles.warningIconContainer}>
+              <MaterialIcons name="warning" size={40} color="#fff" />
             </View>
-            {backgroundTrackingActive && (
-              <Text style={styles.trackingText}>📍 Live tracking active</Text>
-            )}
-          </TouchableOpacity>
+            <Text style={styles.warningTitle}>
+              ⚠️ Warning {currentWarning.number}/3
+            </Text>
+            <Text style={styles.warningMessage}>
+              {currentWarning.message}
+            </Text>
+            <View style={styles.warningTimeBox}>
+              <Text style={styles.warningRemainingTimeLabel}>Time Remaining</Text>
+              <Text style={styles.warningRemainingTime}>{currentWarning.remainingTime}</Text>
+            </View>
+            <View style={styles.warningButtons}>
+              <TouchableOpacity
+                style={[styles.warningButton, styles.skipButton]}
+                onPress={handleSkipWarning}
+              >
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.warningButton, styles.continueButton]}
+                onPress={handlePurchaseExtendedHours}
+              >
+                <Text style={styles.buttonText}>Continue (₹100)</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
-      )}
-      
+      </Modal>
+
+      {/* 🌟 ULTRA PROFESSIONAL OFFLINE CONFIRMATION MODAL 🌟 */}
+      <Modal
+        visible={showOfflineConfirmation}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowOfflineConfirmation(false)}
+      >
+        <View style={styles.ultraProfessionalOverlay}>
+          <View style={styles.ultraProfessionalModal}>
+
+            {/* Gradient Header with Large Icon */}
+            <View style={styles.ultraModalHeader}>
+              <View style={styles.ultraIconContainer}>
+                <View style={styles.ultraIconPulse} />
+                <View style={styles.ultraIconCircle}>
+                  <MaterialIcons name="warning-amber" size={56} color="#fff" />
+                </View>
+              </View>
+            </View>
+
+            {/* Two-Step Professional Content */}
+            {offlineStep === 'warning' ? (
+              /* STEP 1: Warning Message with Yes/No */
+              <>
+                <View style={styles.compactModalContent}>
+                  <Text style={styles.compactModalTitle}>⚠️ Wallet Already Debited</Text>
+
+                  <Text style={styles.warningDescriptionText}>
+                    ₹100 has already been debited from your wallet.
+                  </Text>
+
+                  <Text style={styles.warningDescriptionText}>
+                    If you go OFFLINE now, the amount will not be refunded.
+                  </Text>
+
+                  <Text style={styles.warningQuestionText}>
+                    Are you sure you want to go OFFLINE?
+                  </Text>
+                </View>
+
+                {/* Yes/No Buttons */}
+                <View style={styles.compactButtonContainer}>
+                  <TouchableOpacity
+                    style={styles.compactCancelButton}
+                    onPress={() => {
+                      setShowOfflineConfirmation(false);
+                      setOfflineStep('warning');
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.compactCancelText}>No</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.compactConfirmButton}
+                    onPress={() => setOfflineStep('verification')}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.compactConfirmText}>Yes</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              /* STEP 2: Driver ID Verification */
+              <>
+                <View style={styles.compactModalContent}>
+                  <Text style={styles.compactModalTitle}>Verify Driver ID</Text>
+
+                  <Text style={styles.verificationDescriptionText}>
+                    Enter the last 4 digits of your Driver ID to confirm going offline
+                  </Text>
+
+                  {/* Verification Input */}
+                  <View style={styles.compactVerificationBox}>
+                    <TextInput
+                      style={styles.compactDriverIdInput}
+                      placeholder="••••"
+                      placeholderTextColor="#bdc3c7"
+                      value={driverIdConfirmation}
+                      onChangeText={setDriverIdConfirmation}
+                      keyboardType="number-pad"
+                      maxLength={4}
+                      autoFocus
+                    />
+                  </View>
+                </View>
+
+                {/* Back/Confirm Buttons */}
+                <View style={styles.compactButtonContainer}>
+                  <TouchableOpacity
+                    style={styles.compactCancelButton}
+                    onPress={() => {
+                      setOfflineStep('warning');
+                      setDriverIdConfirmation('');
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.compactCancelText}>Back</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.compactConfirmButton}
+                    onPress={confirmOfflineWithVerification}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.compactConfirmText}>Confirm Offline</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+
+          </View>
+        </View>
+      </Modal>
+
       <View style={styles.statusContainer}>
         <View style={styles.statusRow}>
           <View
@@ -2590,17 +3100,6 @@ const handleBillModalClose = useCallback(() => {
             <Text style={styles.btnText}>Reject</Text>
           </TouchableOpacity>
         </View>
-      )}
-      
-      {/* Logout Button */}
-      {!ride && (
-        <TouchableOpacity
-          style={[styles.button, styles.logoutButton]}
-          onPress={handleLogout}
-        >
-          <MaterialIcons name="logout" size={20} color="#fff" />
-          <Text style={styles.btnText}>Logout</Text>
-        </TouchableOpacity>
       )}
       
       {/* OTP Modal */}
@@ -2707,6 +3206,84 @@ const handleBillModalClose = useCallback(() => {
             <TouchableOpacity style={styles.confirmButton} onPress={handleBillModalClose}>
               <Text style={styles.confirmButtonText}>Confirm & Close Ride</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Professional Custom Alert Modal */}
+      <Modal
+        visible={customAlert.visible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={hideCustomAlert}
+      >
+        <View style={styles.customAlertOverlay}>
+          <View style={styles.customAlertContainer}>
+            {/* Icon Header with Type-based Color */}
+            <View style={[
+              styles.customAlertIconHeader,
+              { backgroundColor:
+                customAlert.type === 'success' ? '#2ecc71' :
+                customAlert.type === 'error' ? '#e74c3c' :
+                customAlert.type === 'warning' ? '#f39c12' :
+                '#3498db'
+              }
+            ]}>
+              <View style={[
+                styles.customAlertIconCircle,
+                { backgroundColor: 'rgba(255, 255, 255, 0.25)' }
+              ]}>
+                <MaterialIcons
+                  name={
+                    customAlert.type === 'success' ? 'check-circle' :
+                    customAlert.type === 'error' ? 'error' :
+                    customAlert.type === 'warning' ? 'warning' :
+                    'info'
+                  }
+                  size={40}
+                  color="#fff"
+                />
+              </View>
+            </View>
+
+            {/* Content */}
+            <View style={styles.customAlertContent}>
+              <Text style={[
+                styles.customAlertTitle,
+                { color:
+                  customAlert.type === 'success' ? '#2ecc71' :
+                  customAlert.type === 'error' ? '#e74c3c' :
+                  customAlert.type === 'warning' ? '#f39c12' :
+                  '#3498db'
+                }
+              ]}>
+                {customAlert.title}
+              </Text>
+              <Text style={styles.customAlertMessage}>
+                {customAlert.message}
+              </Text>
+            </View>
+
+            {/* Buttons */}
+            <View style={styles.customAlertButtons}>
+              {customAlert.buttons.map((button, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={[
+                    styles.customAlertButton,
+                    button.style === 'cancel' ? styles.customAlertButtonCancel :
+                    button.style === 'destructive' ? styles.customAlertButtonDestructive :
+                    styles.customAlertButtonDefault
+                  ]}
+                  onPress={() => {
+                    hideCustomAlert();
+                    button.onPress?.();
+                  }}
+                >
+                  <Text style={styles.customAlertButtonText}>{button.text}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         </View>
       </Modal>
@@ -2886,59 +3463,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 8,
   },
-  minimizedFirstRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  minimizedProfileImage: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#4CAF50",
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
-  },
-  minimizedProfileImageText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  minimizedProfileName: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#333333",
-    flex: 1,
-  },
-  minimizedExpandButton: {
-    padding: 4,
-  },
-  minimizedSecondRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  minimizedMobileContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-  },
-  minimizedMobileText: {
-    fontSize: 14,
-    color: "#333333",
-    marginLeft: 6,
-    flex: 1,
-  },
-  minimizedCallButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#4CAF50",
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 8,
-  },
   // Ride Taken Alert Styles
   rideTakenAlertContainer: {
     position: "absolute",
@@ -2974,53 +3498,6 @@ const styles = StyleSheet.create({
     height: "100%",
     backgroundColor: "#fff",
     borderRadius: 2,
-  },
-  // Online/Offline Toggle Styles - MOVED TO BOTTOM RIGHT
-  onlineToggleContainer: {
-    position: "absolute",
-    top: 120,
-    right: 30,
-    left: 'auto',
-    zIndex: 11,
-  },
-  onlineToggleButton: {
-    padding: 16,
-    borderRadius: 12,
-    elevation: 6,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    minWidth: 330,
-  },
-  onlineButton: {
-    backgroundColor: "#4caf50",
-  },
-  offlineButton: {
-    backgroundColor: "#f44336",
-  },
-  toggleContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  toggleIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 10,
-  },
-  toggleButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  trackingText: {
-    color: "#fff",
-    fontSize: 11,
-    marginTop: 4,
-    textAlign: "center",
-    fontWeight: "500",
   },
   statusContainer: {
     position: "absolute",
@@ -3119,35 +3596,28 @@ const styles = StyleSheet.create({
     zIndex: 100,  // ✅ ADDED for iOS priority
   },
   logoutButton: {
-    backgroundColor: "#dc3545",
     position: "absolute",
     bottom: 20,
     left: 16,
     right: 16,
     elevation: 25, // ✅ INCREASED from 3
     zIndex: 100,  // ✅ ADDED for iOS priority
+    backgroundColor: "#dc3545", // This was missing
   },
-  // startButton: {
-  //   backgroundColor: "#2196f3",
-  //   position: "absolute",
-  //   bottom: 20,
-  //   left: 16,
-  //   right: 16,
-  // },
-  // completeButton: {
-  //   backgroundColor: "#ff9800",
-  //   position: "absolute",
-  //   bottom: 20,
-  //   left: 16,
-  //   right: 16,
-  // },
-  // logoutButton: {
-  //   backgroundColor: "#dc3545",
-  //   position: "absolute",
-  //   bottom: 20,
-  //   left: 16,
-  //   right: 16,
-  // },
+  onlineButtonNew: {
+    backgroundColor: "#2ecc71",
+    position: "absolute",
+    bottom: 20,
+    left: 16,
+    right: 16,
+  },
+  offlineButtonNew: {
+    backgroundColor: "#e74c3c",
+    position: "absolute",
+    bottom: 20,
+    left: 16,
+    right: 16,
+  },
 
 
 
@@ -3191,26 +3661,26 @@ const styles = StyleSheet.create({
   // },
 
 
-  modalOverlay: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.7)",
-    padding: 20,
-    zIndex: 999, // ✅ ADD THIS: Force it to be the top-most layer
-  },
-  modalContainer: {
-    backgroundColor: "white",
-    padding: 24,
-    borderRadius: 20,
-    width: "100%",
-    elevation: 99, // ✅ INCREASED from 12: Must be higher than maximizedDetailsContainer (16)
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    zIndex: 1000, // ✅ ADD THIS
-  },
+modalOverlay: {
+  flex: 1,
+  justifyContent: "center",
+  alignItems: "center",
+  backgroundColor: "rgba(0,0,0,0.8)", // Darker background to make it pop
+  padding: 20,
+  zIndex: 9999, // Extremely high zIndex for iOS
+},
+modalContainer: {
+  backgroundColor: "white",
+  padding: 24,
+  borderRadius: 20,
+  width: "90%",
+  elevation: 30, // Higher than maximizedDetailsContainer (which is 16)
+  shadowColor: "#000",
+  shadowOffset: { width: 0, height: 10 },
+  shadowOpacity: 0.5,
+  shadowRadius: 15,
+  zIndex: 10000, // Ensure it sits above everything
+},
 
 
 
@@ -3412,6 +3882,994 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#FFFFFF",
+  },
+  // Working Hours Timer Styles
+  workingHoursTimerContainer: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    backgroundColor: '#3498db',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    zIndex: 10,
+  },
+  // Top Navigation Buttons
+  topButtonsContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 60 : 40,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    zIndex: 10,
+  },
+  topButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    padding: 12,
+    borderRadius: 25,
+    elevation: 5,
+  },
+  workingHoursTimerText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginLeft: 6,
+  },
+  warningModalOverlay: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Working Hours Warning Modal Styles
+  workingHoursWarningModal: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 30,
+    width: '85%',
+    maxWidth: 400,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  warningIconContainer: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#f39c12',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+    elevation: 8,
+  },
+  warningTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  warningMessage: {
+    fontSize: 16,
+    color: '#34495e',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 10,
+  },
+  warningTimeBox: {
+    backgroundColor: '#f8f9fa',
+    padding: 15,
+    borderRadius: 12,
+    marginVertical: 15,
+    alignItems: 'center',
+    width: '100%',
+  },
+  warningRemainingTimeLabel: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    marginBottom: 5,
+  },
+  warningRemainingTime: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#e74c3c',
+    letterSpacing: 2,
+  },
+  warningButtons: {
+    flexDirection: 'row',
+    marginTop: 20,
+    width: '100%',
+  },
+  warningButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 5,
+    elevation: 3,
+  },
+  skipButton: {
+    backgroundColor: '#fff',
+    borderWidth: 2,
+    borderColor: '#bdc3c7',
+  },
+  continueButton: {
+    backgroundColor: '#2ecc71',
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  skipButtonText: {
+    color: '#7f8c8d',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  // Offline Confirmation Modal Styles
+  driverIdInput: {
+    borderWidth: 2,
+    borderColor: '#3498db',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    fontSize: 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginTop: 15,
+    marginBottom: 20,
+    width: '100%',
+    letterSpacing: 4,
+    color: '#2c3e50',
+  },
+  offlineConfirmButtons: {
+    flexDirection: 'row',
+    width: '100%',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  cancelOfflineButton: {
+    flex: 1,
+    backgroundColor: '#e74c3c',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  confirmOfflineButton: {
+    flex: 1,
+    backgroundColor: '#2ecc71',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+
+  // ========================================
+  // PROFESSIONAL TIMER STYLES
+  // ========================================
+  professionalTimerContainer: {
+    position: 'absolute',
+    top: 60,
+    right: 15,
+    backgroundColor: 'rgba(52, 152, 219, 0.95)',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    elevation: 8,
+    shadowColor: '#3498db',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  timerGlowEffect: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 16,
+    backgroundColor: 'rgba(52, 152, 219, 0.3)',
+    opacity: 0.5,
+  },
+  timerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  timerIconWrapper: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  timerTextWrapper: {
+    flexDirection: 'column',
+  },
+  timerLabel: {
+    fontSize: 10,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  timerValue: {
+    fontSize: 16,
+    color: '#fff',
+    fontWeight: 'bold',
+    letterSpacing: 1,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  timerPulse: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  timerPulseDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#2ecc71',
+  },
+
+  // ========================================
+  // PROFESSIONAL OFFLINE CONFIRMATION MODAL STYLES
+  // ========================================
+  professionalModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  professionalOfflineModal: {
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 0,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 15,
+    overflow: 'hidden',
+  },
+  professionalIconHeader: {
+    backgroundColor: '#e74c3c',
+    paddingVertical: 30,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    borderBottomWidth: 4,
+    borderBottomColor: '#c0392b',
+  },
+  iconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+  },
+  professionalModalTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    textAlign: 'center',
+    marginTop: 24,
+    marginHorizontal: 20,
+  },
+  // Old styles (kept for compatibility)
+  amountBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffebee',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginHorizontal: 20,
+    marginTop: 16,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#ffcdd2',
+  },
+  amountText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#e74c3c',
+  },
+  warningMessageBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff8e1',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    marginHorizontal: 20,
+    marginTop: 16,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#ffe082',
+  },
+  professionalWarningText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#e67e22',
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+
+  // ========================================
+  // PROFESSIONAL AMOUNT BADGE & WARNING BOX
+  // ========================================
+  professionalAmountBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 16,
+    marginHorizontal: 20,
+    marginTop: 20,
+    gap: 14,
+    borderWidth: 2,
+    borderColor: '#e74c3c',
+    shadowColor: '#e74c3c',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  amountIconWrapper: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#e74c3c',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#e74c3c',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  amountTextWrapper: {
+    flex: 1,
+  },
+  amountLabel: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    marginBottom: 4,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  amountValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#e74c3c',
+    letterSpacing: 0.5,
+  },
+  professionalWarningBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#fff3e0',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderRadius: 14,
+    marginHorizontal: 20,
+    marginTop: 16,
+    gap: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: '#f39c12',
+    shadowColor: '#f39c12',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  warningIconBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f39c12',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  warningContentWrapper: {
+    flex: 1,
+  },
+  warningBoxTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#e67e22',
+    marginBottom: 6,
+  },
+  warningBoxMessage: {
+    fontSize: 13,
+    color: '#95641b',
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  helpfulTip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e3f2fd',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    marginHorizontal: 20,
+    marginTop: 12,
+    gap: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#3498db',
+  },
+  helpfulTipText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#2980b9',
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  verificationSection: {
+    marginHorizontal: 20,
+    marginTop: 24,
+    marginBottom: 8,
+  },
+  verificationLabel: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    marginBottom: 12,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  professionalDriverIdInput: {
+    borderWidth: 2,
+    borderColor: '#3498db',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    fontSize: 24,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    letterSpacing: 8,
+    color: '#2c3e50',
+    backgroundColor: '#f8f9fa',
+  },
+  professionalActionButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+  },
+  professionalButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    gap: 8,
+    elevation: 3,
+  },
+  professionalCancelButton: {
+    backgroundColor: '#ecf0f1',
+    borderWidth: 1,
+    borderColor: '#bdc3c7',
+  },
+  professionalCancelButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#7f8c8d',
+  },
+  professionalConfirmButton: {
+    backgroundColor: '#e74c3c',
+  },
+  professionalConfirmButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+
+  // ========================================
+  // 🌟 ULTRA PROFESSIONAL OFFLINE MODAL 🌟
+  // ========================================
+  ultraProfessionalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  ultraProfessionalModal: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    width: '85%',
+    maxWidth: 340,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 15,
+    overflow: 'hidden',
+  },
+
+  // Header Section - Compact
+  ultraModalHeader: {
+    backgroundColor: '#e74c3c',
+    paddingTop: 24,
+    paddingBottom: 20,
+    alignItems: 'center',
+  },
+  ultraIconContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ultraIconPulse: {
+    position: 'absolute',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  ultraIconCircle: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: 'rgba(255, 255, 255, 0.4)',
+  },
+
+  // Content Section
+  ultraModalContent: {
+    padding: 24,
+  },
+  ultraModalTitle: {
+    fontSize: 26,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    textAlign: 'center',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  ultraModalSubtitle: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  ultraDivider: {
+    height: 2,
+    backgroundColor: '#ecf0f1',
+    marginBottom: 20,
+    borderRadius: 1,
+  },
+
+  // Amount Card
+  ultraAmountCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    marginBottom: 16,
+    borderWidth: 2,
+    borderColor: '#e74c3c',
+    overflow: 'hidden',
+    shadowColor: '#e74c3c',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  ultraAmountHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e74c3c',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  ultraAmountHeaderText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#fff',
+    letterSpacing: 0.5,
+  },
+  ultraAmountBody: {
+    padding: 16,
+    backgroundColor: '#fff',
+  },
+  ultraAmountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  ultraAmountLabel: {
+    fontSize: 14,
+    color: '#7f8c8d',
+    fontWeight: '600',
+  },
+  ultraAmountValue: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#e74c3c',
+    letterSpacing: 0.5,
+  },
+  ultraAmountInfo: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3498db',
+  },
+
+  // Warning Card
+  ultraWarningCard: {
+    backgroundColor: '#fff9e6',
+    borderRadius: 14,
+    marginBottom: 16,
+    borderLeftWidth: 5,
+    borderLeftColor: '#f39c12',
+    overflow: 'hidden',
+    shadowColor: '#f39c12',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  ultraWarningHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#fef5e7',
+    gap: 10,
+  },
+  ultraWarningIconCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f39c12',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  ultraWarningHeaderText: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#e67e22',
+  },
+  ultraWarningBody: {
+    padding: 14,
+  },
+  ultraWarningPoint: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+    gap: 10,
+  },
+  ultraWarningPointText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#5d4e37',
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  ultraWarningPointTextGreen: {
+    flex: 1,
+    fontSize: 13,
+    color: '#27ae60',
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+
+  // Verification Card
+  ultraVerificationCard: {
+    backgroundColor: '#f0f8ff',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#d6eaf8',
+  },
+  ultraVerificationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  ultraVerificationTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#2980b9',
+  },
+  ultraVerificationLabel: {
+    fontSize: 13,
+    color: '#5d6d7e',
+    marginBottom: 12,
+    fontWeight: '500',
+  },
+  ultraInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#3498db',
+    paddingHorizontal: 14,
+    gap: 10,
+  },
+  ultraDriverIdInput: {
+    flex: 1,
+    paddingVertical: 14,
+    fontSize: 20,
+    fontWeight: 'bold',
+    letterSpacing: 4,
+    color: '#2c3e50',
+    textAlign: 'center',
+  },
+
+  // Button Container
+  ultraButtonContainer: {
+    flexDirection: 'row',
+    padding: 20,
+    gap: 12,
+    backgroundColor: '#f8f9fa',
+    borderTopWidth: 1,
+    borderTopColor: '#ecf0f1',
+  },
+  ultraCancelButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ecf0f1',
+    paddingVertical: 16,
+    borderRadius: 14,
+    gap: 8,
+    borderWidth: 2,
+    borderColor: '#bdc3c7',
+    shadowColor: '#95a5a6',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  ultraCancelButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#7f8c8d',
+    letterSpacing: 0.5,
+  },
+  ultraConfirmButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e74c3c',
+    paddingVertical: 16,
+    borderRadius: 14,
+    gap: 8,
+    shadowColor: '#c0392b',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  ultraConfirmButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#fff',
+    letterSpacing: 0.5,
+  },
+
+  // ========================================
+  // COMPACT MODAL STYLES (Medium Size)
+  // ========================================
+  compactModalContent: {
+    padding: 20,
+  },
+  compactModalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  warningDescriptionText: {
+    fontSize: 15,
+    color: '#555',
+    textAlign: 'center',
+    marginBottom: 12,
+    lineHeight: 22,
+  },
+  warningQuestionText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#e74c3c',
+    textAlign: 'center',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  verificationDescriptionText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  compactWarningBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff3cd',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginBottom: 18,
+    gap: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: '#f39c12',
+  },
+  compactWarningText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#856404',
+    fontWeight: '600',
+  },
+  compactVerificationBox: {
+    marginBottom: 4,
+  },
+  compactInputLabel: {
+    fontSize: 13,
+    color: '#7f8c8d',
+    marginBottom: 10,
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  compactDriverIdInput: {
+    backgroundColor: '#f8f9fa',
+    borderWidth: 2,
+    borderColor: '#3498db',
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    letterSpacing: 6,
+    color: '#2c3e50',
+  },
+  compactButtonContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    gap: 12,
+    backgroundColor: '#f8f9fa',
+    borderTopWidth: 1,
+    borderTopColor: '#e9ecef',
+  },
+  compactCancelButton: {
+    flex: 1,
+    backgroundColor: '#e9ecef',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ced4da',
+  },
+  compactCancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#6c757d',
+  },
+  compactConfirmButton: {
+    flex: 1,
+    backgroundColor: '#e74c3c',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  compactConfirmText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#fff',
+  },
+
+  // ========================================
+  // CUSTOM ALERT MODAL STYLES
+  // ========================================
+  customAlertOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  customAlertContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 0,
+    width: '100%',
+    maxWidth: 380,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 12,
+    overflow: 'hidden',
+  },
+  customAlertIconHeader: {
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  customAlertIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  customAlertContent: {
+    paddingHorizontal: 24,
+    paddingBottom: 20,
+  },
+  customAlertTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  customAlertMessage: {
+    fontSize: 15,
+    textAlign: 'center',
+    lineHeight: 22,
+    color: '#555',
+  },
+  customAlertButtons: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    gap: 10,
+  },
+  customAlertButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 2,
+  },
+  customAlertButtonDefault: {
+    backgroundColor: '#3498db',
+  },
+  customAlertButtonCancel: {
+    backgroundColor: '#95a5a6',
+  },
+  customAlertButtonDestructive: {
+    backgroundColor: '#e74c3c',
+  },
+  customAlertButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 
@@ -8740,31 +10198,31 @@ const styles = StyleSheet.create({
 //         </View>
 //       )}
       
-//       {/* Online/Offline Toggle Button - MOVED TO BOTTOM RIGHT */}
-//       {!ride && (
-//         <View style={styles.onlineToggleContainer}>
-//           <TouchableOpacity
-//             style={[
-//               styles.onlineToggleButton,
-//               isDriverOnline ? styles.onlineButton : styles.offlineButton
-//             ]}
-//             onPress={toggleOnlineStatus}
-//           >
-//             <View style={styles.toggleContent}>
-//               <View style={[
-//                 styles.toggleIndicator,
-//                 { backgroundColor: isDriverOnline ? "#4caf50" : "#f44336" }
-//               ]} />
-//               <Text style={styles.toggleButtonText}>
-//                 {isDriverOnline ? "🟢 ONLINE" : "🔴 OFFLINE"}
-//               </Text>
-//             </View>
-//             {backgroundTrackingActive && (
-//               <Text style={styles.trackingText}>📍 Live tracking active</Text>
-//             )}
-//           </TouchableOpacity>
-//         </View>
-//       )}
+      {/* Online/Offline Toggle Button - MOVED TO BOTTOM RIGHT */}
+      {!ride && (
+        <View style={styles.onlineToggleContainer}>
+          <TouchableOpacity
+            style={[
+              styles.onlineToggleButton,
+              isDriverOnline ? styles.onlineButton : styles.offlineButton
+            ]}
+            onPress={toggleOnlineStatus}
+          >
+            <View style={styles.toggleContent}>
+              <View style={[
+                styles.toggleIndicator,
+                { backgroundColor: isDriverOnline ? "#4caf50" : "#f44336" }
+              ]} />
+              <Text style={styles.toggleButtonText}>
+                {isDriverOnline ? "🟢 ONLINE" : "🔴 OFFLINE"}
+              </Text>
+            </View>
+            {backgroundTrackingActive && (
+              <Text style={styles.trackingText}>📍 Live tracking active</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
       
 //       <View style={styles.statusContainer}>
 //         <View style={styles.statusRow}>

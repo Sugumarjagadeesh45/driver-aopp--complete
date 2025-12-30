@@ -20,6 +20,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   const [notifications, setNotifications] = useState(true);
   const [locationSharing, setLocationSharing] = useState(true);
   const [autoAccept, setAutoAccept] = useState(false);
+  const [workingHoursReminder, setWorkingHoursReminder] = useState(true);
 
   const SettingItem = ({ icon, title, subtitle, onPress, showSwitch, switchValue, onSwitchChange }: any) => (
     <TouchableOpacity
@@ -82,6 +83,14 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
             switchValue={locationSharing}
             onSwitchChange={setLocationSharing}
           />
+          <SettingItem
+            icon="access-time"
+            title="Working Hours Reminder"
+            subtitle="Get notified about remaining working hours"
+            showSwitch
+            switchValue={workingHoursReminder}
+            onSwitchChange={setWorkingHoursReminder}
+          />
         </View>
 
         <View style={styles.section}>
@@ -94,6 +103,24 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
             switchValue={autoAccept}
             onSwitchChange={setAutoAccept}
           />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Working Hours</Text>
+          <View style={styles.infoCard}>
+            <View style={styles.infoIcon}>
+              <MaterialIcons name="info" size={24} color="#3498db" />
+            </View>
+            <View style={styles.infoContent}>
+              <Text style={styles.infoTitle}>Working Hours System</Text>
+              <Text style={styles.infoText}>
+                • Timer starts when you go ONLINE{'\n'}
+                • You'll receive 3 warnings before time expires{'\n'}
+                • Extend hours for ₹100 (12 hours){'\n'}
+                • Auto-stop when time reaches 00:00:00
+              </Text>
+            </View>
+          </View>
         </View>
 
         <View style={styles.section}>
@@ -230,6 +257,38 @@ const styles = StyleSheet.create({
   settingSubtitle: {
     fontSize: 13,
     color: '#7f8c8d',
+  },
+  infoCard: {
+    flexDirection: 'row',
+    backgroundColor: '#e3f2fd',
+    padding: 15,
+    borderRadius: 12,
+    marginBottom: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: '#3498db',
+  },
+  infoIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  infoContent: {
+    flex: 1,
+  },
+  infoTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 6,
+  },
+  infoText: {
+    fontSize: 13,
+    color: '#34495e',
+    lineHeight: 20,
   },
 });
 
