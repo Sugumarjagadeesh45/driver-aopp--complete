@@ -13,6 +13,7 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE } from './apiConfig';
 
 interface WalletScreenProps {
   navigation: any;
@@ -47,12 +48,25 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // ✅ Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const ITEMS_PER_PAGE = 10;
+
   useEffect(() => {
     fetchWalletData();
   }, []);
 
-  const fetchWalletData = async () => {
+  const fetchWalletData = async (page: number = 1, append: boolean = false) => {
     try {
+      if (!append) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
       const driverInfoStr = await AsyncStorage.getItem('driverInfo');
 
       if (!driverInfoStr) {
@@ -63,27 +77,82 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
 
       const driverInfo = JSON.parse(driverInfoStr);
 
-      // Use wallet balance from login response stored in AsyncStorage
-      // Since backend doesn't have /wallet endpoint yet, we show the balance from driverInfo
-      setWalletData({
-        balance: driverInfo.wallet || 0,
-        currency: 'INR',
-        totalEarnings: driverInfo.wallet || 0, // For now, same as balance
-        pendingAmount: 0, // Will be available when backend adds endpoint
-        transactions: [], // Will be populated when backend adds endpoint
-      });
+      // ✅ Fetch transactions from backend API with pagination
+      try {
+        const response = await fetch(
+          `${API_BASE}/drivers/wallet/history/${driverInfo.driverId}?page=${page}&limit=${ITEMS_PER_PAGE}`,
+          {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        const result = await response.json();
+
+        if (result.success && result.transactions) {
+          console.log(`✅ Fetched ${result.transactions.length} transactions (page ${page})`);
+
+          const newTransactions = append
+            ? [...walletData.transactions, ...result.transactions]
+            : result.transactions;
+
+          setWalletData({
+            balance: driverInfo.wallet || 0,
+            currency: 'INR',
+            totalEarnings: result.totalEarnings || driverInfo.wallet || 0,
+            pendingAmount: result.pendingAmount || 0,
+            transactions: newTransactions,
+          });
+
+          setTotalPages(result.totalPages || 1);
+          setHasMore(result.hasMore || false);
+          setCurrentPage(page);
+        } else {
+          // Backend endpoint doesn't exist yet, show empty state
+          console.log('⚠️ Backend wallet history endpoint not available yet');
+          setWalletData({
+            balance: driverInfo.wallet || 0,
+            currency: 'INR',
+            totalEarnings: driverInfo.wallet || 0,
+            pendingAmount: 0,
+            transactions: [],
+          });
+        }
+      } catch (apiError: any) {
+        // Backend endpoint doesn't exist yet
+        console.log('⚠️ Wallet history API not available:', apiError.message);
+        setWalletData({
+          balance: driverInfo.wallet || 0,
+          currency: 'INR',
+          totalEarnings: driverInfo.wallet || 0,
+          pendingAmount: 0,
+          transactions: [],
+        });
+      }
     } catch (error: any) {
       console.error('Error loading wallet data:', error);
       Alert.alert('Error', 'Failed to load wallet data');
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingMore(false);
     }
   };
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchWalletData();
+    setCurrentPage(1);
+    fetchWalletData(1, false); // Reset to page 1
+  };
+
+  // ✅ Load more transactions (pagination)
+  const loadMoreTransactions = () => {
+    if (!loadingMore && hasMore) {
+      const nextPage = currentPage + 1;
+      fetchWalletData(nextPage, true); // Append to existing transactions
+    }
   };
 
   const formatCurrency = (amount: number) => {
@@ -270,18 +339,54 @@ const WalletScreen: React.FC<WalletScreenProps> = ({ navigation }) => {
 
         {/* Transactions */}
         <View style={styles.transactionsSection}>
-          <Text style={styles.sectionTitle}>Recent Transactions</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Transaction History</Text>
+            {totalPages > 1 && (
+              <Text style={styles.pageIndicator}>
+                Page {currentPage} of {totalPages}
+              </Text>
+            )}
+          </View>
 
           {walletData.transactions.length > 0 ? (
-            walletData.transactions.map((transaction) => (
-              <TransactionItem key={transaction.id} transaction={transaction} />
-            ))
+            <>
+              {walletData.transactions.map((transaction) => (
+                <TransactionItem key={transaction.id} transaction={transaction} />
+              ))}
+
+              {/* Load More Button */}
+              {hasMore && (
+                <TouchableOpacity
+                  style={styles.loadMoreButton}
+                  onPress={loadMoreTransactions}
+                  disabled={loadingMore}
+                >
+                  {loadingMore ? (
+                    <ActivityIndicator size="small" color="#2ecc71" />
+                  ) : (
+                    <>
+                      <MaterialIcons name="expand-more" size={20} color="#2ecc71" />
+                      <Text style={styles.loadMoreText}>Load More Transactions</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {/* End of List Indicator */}
+              {!hasMore && walletData.transactions.length >= ITEMS_PER_PAGE && (
+                <View style={styles.endOfListContainer}>
+                  <View style={styles.endOfListDivider} />
+                  <Text style={styles.endOfListText}>No more transactions</Text>
+                  <View style={styles.endOfListDivider} />
+                </View>
+              )}
+            </>
           ) : (
             <View style={styles.emptyState}>
               <MaterialIcons name="receipt-long" size={60} color="#bdc3c7" />
               <Text style={styles.emptyStateText}>No transactions yet</Text>
               <Text style={styles.emptyStateSubtext}>
-                Start earning by completing rides
+                Your wallet transactions will appear here
               </Text>
             </View>
           )}
@@ -444,11 +549,63 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingBottom: 20,
   },
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#2c3e50',
+  },
+  pageIndicator: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    fontWeight: '600',
+  },
+  loadMoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginTop: 10,
     marginBottom: 15,
+    borderWidth: 1.5,
+    borderColor: '#2ecc71',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  loadMoreText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2ecc71',
+    marginLeft: 8,
+  },
+  endOfListContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 15,
+    marginBottom: 10,
+  },
+  endOfListDivider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#e0e0e0',
+  },
+  endOfListText: {
+    fontSize: 12,
+    color: '#95a5a6',
+    marginHorizontal: 15,
+    fontWeight: '500',
   },
   transactionItem: {
     flexDirection: 'row',

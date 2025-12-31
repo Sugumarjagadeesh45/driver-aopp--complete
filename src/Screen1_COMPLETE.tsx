@@ -619,10 +619,11 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
   const sendFCMTokenToServer = async (token: string): Promise<boolean> => {
   try {
     console.log('📤 Sending FCM token to server for driver:', driverId);
-    
-    const API_BASE = Platform.OS === 'android' 
-      ? 'https://taxi.webase.co.in'
-      : 'https://taxi.webase.co.in';
+
+    // ✅ LOCALHOST SERVER - PORT 5001
+    const API_BASE = Platform.OS === 'android'
+      ? 'http://10.0.2.2:5001'
+      : 'http://localhost:5001';
     
     // ✅ Use the correct endpoint that matches your server
     const response = await fetch(`${API_BASE}/api/drivers/update-fcm-token`, {

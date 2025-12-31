@@ -14,11 +14,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "58058999898-nmtd7jut2f641vidkqjd5ltuu9g0ks9u.apps.googleusercontent.com",
+          "client_id": "58058999898-r6f68qp04tmbihpapvmqmr90kg8ot2t4.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.webase.eazygo",
-            "certificate_hash": "c3122bb3bc655ca58286c1dfdf6bf78f857ce578"
+            "certificate_hash": "816c27b9923718b24b8e1ac9df679c6e918229d8"
           }
         },
         {

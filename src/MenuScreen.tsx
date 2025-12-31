@@ -30,6 +30,7 @@ interface DriverInfo {
   vehicleType?: string;
   vehicleNumber?: string;
   wallet?: number; // Wallet balance from login response
+  onlineStatus?: 'online' | 'offline'; // Online/Offline status from backend
 }
 
 const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
@@ -42,6 +43,7 @@ const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
     remainingSeconds: 0,
     assignedHours: 12,
   });
+  const [autoStopEnabled, setAutoStopEnabled] = useState(false);
   const APP_VERSION = '1.0.0';
 
   useEffect(() => {
@@ -118,6 +120,173 @@ const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // ========================================
+  // WORKING HOURS CONTROL HANDLERS
+  // ========================================
+
+  const handleAutoStop = async () => {
+    Alert.alert(
+      'Auto-Stop',
+      'This will automatically stop your working hours and set you OFFLINE when the timer reaches 00:00:00.\n\nExtra Half Time and Extra Full Time buttons will be disabled.\n\nContinue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Enable',
+          onPress: async () => {
+            try {
+              setAutoStopEnabled(true);
+              Alert.alert('✅ Auto-Stop Enabled', 'You will automatically go OFFLINE when working hours end.\n\nExtra time buttons are now disabled.');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to enable auto-stop');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleExtraHalfTime = async () => {
+    if (!driverInfo?.driverId) return;
+    if (autoStopEnabled) {
+      Alert.alert('⚠️ Auto-Stop Enabled', 'Extra time buttons are disabled when Auto-Stop is enabled.');
+      return;
+    }
+
+    const assignedHours = workingHoursStatus.assignedHours || 12;
+    const additionalSeconds = assignedHours === 12 ? 21599 : 43199; // 05:59:59 for 12h, 11:59:59 for 24h
+    const additionalTime = assignedHours === 12 ? '05:59:59' : '11:59:59';
+    const debitAmount = 50;
+
+    Alert.alert(
+      'Add Extra Half Time',
+      `Add +${additionalTime} to your working hours?\n\n₹${debitAmount} will be debited from your wallet.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Add Time',
+          onPress: async () => {
+            try {
+              const response = await fetch(`${API_BASE}/drivers/working-hours/extend`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  driverId: driverInfo.driverId,
+                  additionalSeconds: additionalSeconds,
+                  debitAmount: debitAmount,
+                }),
+              });
+              const result = await response.json();
+
+              if (result.success) {
+                // Update local state
+                setWorkingHoursStatus((prev) => ({
+                  ...prev,
+                  remainingSeconds: prev.remainingSeconds + additionalSeconds,
+                  remainingTime: formatTime(prev.remainingSeconds + additionalSeconds),
+                }));
+
+                // Update wallet balance
+                if (result.newWalletBalance !== undefined) {
+                  setWalletBalance(result.newWalletBalance);
+                  // Update AsyncStorage
+                  const driverInfoStr = await AsyncStorage.getItem('driverInfo');
+                  if (driverInfoStr) {
+                    const info = JSON.parse(driverInfoStr);
+                    info.wallet = result.newWalletBalance;
+                    await AsyncStorage.setItem('driverInfo', JSON.stringify(info));
+                  }
+                }
+
+                Alert.alert('✅ Success', `Added ${additionalTime} to your working hours!\n\n₹${debitAmount} debited\nNew Balance: ₹${result.newWalletBalance || 'N/A'}`);
+                loadDriverData(); // Refresh data
+              } else {
+                Alert.alert('❌ Failed', result.message || 'Could not add extra time');
+              }
+            } catch (error) {
+              console.error('Error adding extra half time:', error);
+              Alert.alert('Error', 'Failed to add extra time');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleExtraFullTime = async () => {
+    if (!driverInfo?.driverId) return;
+    if (autoStopEnabled) {
+      Alert.alert('⚠️ Auto-Stop Enabled', 'Extra time buttons are disabled when Auto-Stop is enabled.');
+      return;
+    }
+
+    const assignedHours = workingHoursStatus.assignedHours || 12;
+    const additionalSeconds = assignedHours === 12 ? 43199 : 86399; // 11:59:59 for 12h, 23:59:59 for 24h
+    const additionalTime = assignedHours === 12 ? '11:59:59' : '23:59:59';
+    const debitAmount = 100;
+
+    Alert.alert(
+      'Add Extra Full Time',
+      `Add +${additionalTime} to your working hours?\n\n₹${debitAmount} will be debited from your wallet.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Add Time',
+          onPress: async () => {
+            try {
+              const response = await fetch(`${API_BASE}/drivers/working-hours/extend`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  driverId: driverInfo.driverId,
+                  additionalSeconds: additionalSeconds,
+                  debitAmount: debitAmount,
+                }),
+              });
+              const result = await response.json();
+
+              if (result.success) {
+                // Update local state
+                setWorkingHoursStatus((prev) => ({
+                  ...prev,
+                  remainingSeconds: prev.remainingSeconds + additionalSeconds,
+                  remainingTime: formatTime(prev.remainingSeconds + additionalSeconds),
+                }));
+
+                // Update wallet balance
+                if (result.newWalletBalance !== undefined) {
+                  setWalletBalance(result.newWalletBalance);
+                  // Update AsyncStorage
+                  const driverInfoStr = await AsyncStorage.getItem('driverInfo');
+                  if (driverInfoStr) {
+                    const info = JSON.parse(driverInfoStr);
+                    info.wallet = result.newWalletBalance;
+                    await AsyncStorage.setItem('driverInfo', JSON.stringify(info));
+                  }
+                }
+
+                Alert.alert('✅ Success', `Added ${additionalTime} to your working hours!\n\n₹${debitAmount} debited\nNew Balance: ₹${result.newWalletBalance || 'N/A'}`);
+                loadDriverData(); // Refresh data
+              } else {
+                Alert.alert('❌ Failed', result.message || 'Could not add extra time');
+              }
+            } catch (error) {
+              console.error('Error adding extra full time:', error);
+              Alert.alert('Error', 'Failed to add extra time');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Helper function to format seconds to HH:MM:SS
+  const formatTime = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   };
 
   const handleLogout = async () => {
@@ -225,25 +394,101 @@ const MenuScreen: React.FC<MenuScreenProps> = ({ navigation, route }) => {
 
         {/* Working Hours Status Banner */}
         {workingHoursStatus.active && (
-          <View style={styles.workingHoursBanner}>
-            <LinearGradient
-              colors={['#3498db', '#2980b9']}
-              style={styles.workingHoursGradient}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-            >
-              <View style={styles.workingHoursIcon}>
-                <MaterialIcons name="access-time" size={28} color="#fff" />
-              </View>
-              <View style={styles.workingHoursContent}>
-                <Text style={styles.workingHoursLabel}>Working Hours Remaining</Text>
-                <Text style={styles.workingHoursTime}>{workingHoursStatus.remainingTime}</Text>
-              </View>
-              <View style={styles.workingHoursBadge}>
-                <Text style={styles.workingHoursBadgeText}>{workingHoursStatus.assignedHours}h</Text>
-              </View>
-            </LinearGradient>
-          </View>
+          <>
+            <View style={styles.workingHoursBanner}>
+              <LinearGradient
+                colors={['#3498db', '#2980b9']}
+                style={styles.workingHoursGradient}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+              >
+                <View style={styles.workingHoursIcon}>
+                  <MaterialIcons name="access-time" size={28} color="#fff" />
+                </View>
+                <View style={styles.workingHoursContent}>
+                  <Text style={styles.workingHoursLabel}>Working Hours Remaining</Text>
+                  <Text style={styles.workingHoursTime}>{workingHoursStatus.remainingTime}</Text>
+                </View>
+                <View style={styles.workingHoursBadge}>
+                  <Text style={styles.workingHoursBadgeText}>{workingHoursStatus.assignedHours}h</Text>
+                </View>
+              </LinearGradient>
+            </View>
+
+            {/* Working Hours Control Buttons */}
+            <View style={styles.controlButtonsContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.controlButton,
+                  styles.autoStopButton,
+                  autoStopEnabled && styles.autoStopButtonActive,
+                ]}
+                onPress={handleAutoStop}
+              >
+                <MaterialIcons
+                  name={autoStopEnabled ? 'check-circle' : 'stop-circle'}
+                  size={20}
+                  color={autoStopEnabled ? '#fff' : '#e74c3c'}
+                />
+                <Text
+                  style={[
+                    styles.controlButtonText,
+                    autoStopEnabled && styles.autoStopButtonActiveText,
+                  ]}
+                >
+                  {autoStopEnabled ? '✓ Auto-Stop' : 'Auto-Stop'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.controlButton,
+                  styles.halfTimeButton,
+                  autoStopEnabled && styles.disabledButton,
+                ]}
+                onPress={handleExtraHalfTime}
+                disabled={autoStopEnabled}
+              >
+                <MaterialIcons
+                  name="update"
+                  size={20}
+                  color={autoStopEnabled ? '#999' : '#f39c12'}
+                />
+                <Text
+                  style={[
+                    styles.controlButtonText,
+                    autoStopEnabled && styles.disabledButtonText,
+                  ]}
+                >
+                  {workingHoursStatus.assignedHours === 12 ? '+05:59:59' : '+11:59:59'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.controlButton,
+                  styles.fullTimeButton,
+                  autoStopEnabled && styles.disabledButton,
+                ]}
+                onPress={handleExtraFullTime}
+                disabled={autoStopEnabled}
+              >
+                <MaterialIcons
+                  name="add-circle"
+                  size={20}
+                  color={autoStopEnabled ? '#999' : '#27ae60'}
+                />
+                <Text
+                  style={[
+                    styles.controlButtonText,
+                    autoStopEnabled && styles.disabledButtonText,
+                  ]}
+                >
+                  {workingHoursStatus.assignedHours === 12 ? '+11:59:59' : '+23:59:59'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </>
         )}
 
         {/* Menu Items */}
@@ -496,6 +741,65 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#fff',
+  },
+  // ========================================
+  // CONTROL BUTTONS STYLES
+  // ========================================
+  controlButtonsContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 15,
+    marginBottom: 20,
+    gap: 10,
+  },
+  controlButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  autoStopButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: '#e74c3c',
+  },
+  halfTimeButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: '#f39c12',
+  },
+  fullTimeButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: '#27ae60',
+  },
+  controlButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#2c3e50',
+  },
+  autoStopButtonActive: {
+    backgroundColor: '#e74c3c',
+    borderColor: '#c0392b',
+  },
+  autoStopButtonActiveText: {
+    color: '#fff',
+  },
+  disabledButton: {
+    backgroundColor: '#f5f5f5',
+    borderColor: '#d0d0d0',
+    opacity: 0.6,
+  },
+  disabledButtonText: {
+    color: '#999',
   },
 });
 

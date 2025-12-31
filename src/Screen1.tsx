@@ -28,6 +28,7 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import FontAwesome from "react-native-vector-icons/FontAwesome";
 import BackgroundTimer from 'react-native-background-timer';
 import NotificationService from './Notifications';
+import AnimatedMapUtils from './utils/AnimatedMapUtils';
 
 const { width, height } = Dimensions.get("window");
 
@@ -88,6 +89,15 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
   const [visibleRouteCoords, setVisibleRouteCoords] = useState<LocationType[]>([]);
   const [nearestPointIndex, setNearestPointIndex] = useState(0);
   const [mapRegion, setMapRegion] = useState<any>(null);
+
+  // ✅ SMOOTH ANIMATION STATES
+  const [driverBearing, setDriverBearing] = useState(0);
+  const [previousLocation, setPreviousLocation] = useState<LocationType | null>(null);
+  const [travelledRoute, setTravelledRoute] = useState<LocationType[]>([]);
+  const animatedLatitude = useRef(new Animated.Value(location?.latitude || 0)).current;
+  const animatedLongitude = useRef(new Animated.Value(location?.longitude || 0)).current;
+  const animatedBearing = useRef(new Animated.Value(0)).current;
+  const polylineOpacity = useRef(new Animated.Value(1)).current;
 
   // App state management
   const [isAppActive, setIsAppActive] = useState(true);
@@ -509,59 +519,126 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
     };
   }, [ride, rideStatus, saveRideState, restoreRideState]);
   
-  // Background location tracking with regular geolocation
+  // ✅ SMOOTH ANIMATED Background location tracking
   const startBackgroundLocationTracking = useCallback(() => {
-    console.log("🔄 Starting background location tracking");
-   
+    console.log("🔄 Starting background location tracking with SMOOTH ANIMATIONS");
+
     // Stop any existing tracking
     if (geolocationWatchId.current) {
       Geolocation.clearWatch(geolocationWatchId.current);
     }
-   
+
     // Start high-frequency tracking when online
     geolocationWatchId.current = Geolocation.watchPosition(
       (position) => {
         if (!isMounted.current || !isDriverOnline) return;
-       
+
         const newLocation = {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
         };
-       
-        console.log("📍 Location update:", newLocation);
+
+        const speed = position.coords.speed || 0; // meters per second
+        const heading = position.coords.heading || 0; // degrees (0-360)
+
+        console.log("📍 Location update:", newLocation, `Speed: ${speed.toFixed(1)}m/s`, `Heading: ${heading.toFixed(1)}°`);
+
+        // ✅ SMOOTH ANIMATION: Only update if location changed significantly
+        if (previousLocation && AnimatedMapUtils.isSignificantLocationChange(previousLocation, newLocation, 5)) {
+
+          // Calculate bearing from movement
+          const calculatedBearing = AnimatedMapUtils.calculateBearing(previousLocation, newLocation);
+          const finalBearing = heading > 0 ? heading : calculatedBearing;
+
+          // ✅ SMOOTH MARKER POSITION ANIMATION
+          AnimatedMapUtils.animateMarkerToCoordinate(
+            animatedLatitude,
+            animatedLongitude,
+            previousLocation,
+            newLocation,
+            speed
+          );
+
+          // ✅ SMOOTH MARKER ROTATION ANIMATION
+          AnimatedMapUtils.animateMarkerRotation(
+            animatedBearing,
+            driverBearing,
+            finalBearing,
+            500
+          );
+
+          setDriverBearing(finalBearing);
+
+          // ✅ SMOOTH CAMERA TRACKING: Follow driver with bearing
+          if (mapRef.current && (rideStatus === "accepted" || rideStatus === "started")) {
+            AnimatedMapUtils.animateCameraToRegion(
+              mapRef,
+              newLocation,
+              finalBearing,
+              800
+            );
+          }
+
+          // ✅ DYNAMIC POLYLINE: Update travelled vs remaining route
+          if (rideStatus === "started" && fullRouteCoords.length > 0) {
+            const progressiveRoute = AnimatedMapUtils.getProgressiveRoute(newLocation, fullRouteCoords);
+
+            // Smooth transition
+            AnimatedMapUtils.animatePolylineUpdate(polylineOpacity, () => {
+              setTravelledRoute(progressiveRoute.travelled);
+              setVisibleRouteCoords(progressiveRoute.remaining);
+            });
+
+            console.log(`🛣️ Route progress: ${progressiveRoute.progress.toFixed(1)}%`);
+          }
+        }
+
         setLocation(newLocation);
-        setCurrentSpeed(position.coords.speed || 0);
-       
+        setPreviousLocation(newLocation);
+        setCurrentSpeed(speed);
+
         // Update distance if ride is active
         if (lastCoord && (rideStatus === "accepted" || rideStatus === "started")) {
-          const dist = haversine(lastCoord, newLocation);
+          const dist = AnimatedMapUtils.haversineDistance(lastCoord, newLocation);
           const distanceKm = dist / 1000;
           setTravelledKm((prev) => prev + distanceKm);
-         
+
           if (rideStatus === "started" && lastLocationBeforeOtp.current) {
             distanceSinceOtp.current += distanceKm;
           }
         }
-       
+
         setLastCoord(newLocation);
         lastLocationUpdate.current = newLocation;
-       
-        // Send to server and socket
+
+        // Send to server and socket with bearing
         saveLocationToDatabase(newLocation);
+
+        // ✅ Send bearing to socket for real-time tracking
+        if (socket?.connected) {
+          socket.emit("driverLocationUpdate", {
+            driverId,
+            latitude: newLocation.latitude,
+            longitude: newLocation.longitude,
+            bearing: driverBearing,
+            speed,
+            timestamp: new Date().toISOString(),
+          });
+        }
       },
       (error) => {
         console.error("❌ Geolocation error:", error);
       },
       {
         enableHighAccuracy: true,
-        distanceFilter: 5, // 5 meters
-        interval: 3000, // 3 seconds
-        fastestInterval: 2000, // 2 seconds
+        distanceFilter: 3, // ✅ 3 meters for smoother updates
+        interval: 1000, // ✅ 1 second for professional smoothness
+        fastestInterval: 500, // ✅ 500ms fastest update
       }
     );
-   
+
     setBackgroundTrackingActive(true);
-  }, [isDriverOnline, lastCoord, rideStatus]);
+  }, [isDriverOnline, lastCoord, rideStatus, previousLocation, driverBearing, fullRouteCoords, driverId, socket, animatedLatitude, animatedLongitude, animatedBearing, polylineOpacity]);
   
   // Stop background location tracking
   const stopBackgroundLocationTracking = useCallback(() => {
@@ -579,7 +656,21 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
    
     setBackgroundTrackingActive(false);
   }, []);
-  
+
+  // ✅ Initialize animated values when location first becomes available
+  useEffect(() => {
+    if (location) {
+      console.log("🎯 Initializing animated marker at:", location);
+      animatedLatitude.setValue(location.latitude);
+      animatedLongitude.setValue(location.longitude);
+
+      // Set previous location for smooth transitions
+      if (!previousLocation) {
+        setPreviousLocation(location);
+      }
+    }
+  }, [location?.latitude, location?.longitude]);
+
   // FCM: Initialize notification system
    // FCM: Initialize notification system
   useEffect(() => {
@@ -710,14 +801,14 @@ const handleNotificationRideRequest = useCallback(async (data: any) => {
 
   console.log('🔔 Processing notification ride request:', data.rideId);
 
-  // ✅ FIX: Normalize both types to UPPERCASE for comparison
-  const storedType = await AsyncStorage.getItem("driverVehicleType");
-  const myDriverType = (storedType || "taxi").trim().toUpperCase(); 
-  const requestVehicleType = (data.vehicleType || "").trim().toUpperCase();
+  // ✅ FIX: Normalize both types to LOWERCASE for comparison (STRICT RULE)
+  const storedType = await AsyncStorage.getItem("vehicleType");
+  const myDriverType = (storedType || "taxi").trim().toLowerCase(); // ✅ ALWAYS LOWERCASE
+  const requestVehicleType = (data.vehicleType || "").trim().toLowerCase(); // ✅ ALWAYS LOWERCASE
 
   console.log(`🔍 Type Check (FCM): Me=[${myDriverType}] vs Ride=[${requestVehicleType}]`);
 
-  // Only ignore if the types are definitely different
+  // ✅ STRICT: Only process if vehicle types match exactly
   if (requestVehicleType && myDriverType && myDriverType !== requestVehicleType) {
       console.log(`🚫 Ignoring notification: Driver is ${myDriverType}, ride requires ${requestVehicleType}`);
       return;
@@ -846,7 +937,7 @@ const startWorkingHoursTimer = useCallback(async () => {
 
     if (result.success) {
       console.log('✅ Working hours timer started:', result);
-      
+
       // ✅ FIX: Update state immediately to start the local timer
       setWorkingHoursTimer({
         active: true,
@@ -857,10 +948,14 @@ const startWorkingHoursTimer = useCallback(async () => {
         totalHours: 12,
       });
 
-      // ✅ FIX: Log wallet deduction if backend returns it
+      // ✅ FIX: Update wallet balance (check if backend returns it)
       if (result.walletBalance !== undefined) {
         console.log(`💰 Wallet Debited. New Balance: ₹${result.walletBalance}`);
         updateLocalWalletBalance(result.walletBalance);
+      } else {
+        // Backend didn't return wallet balance, fetch it separately
+        console.log('⚠️ Backend did not return walletBalance, fetching separately...');
+        fetchAndUpdateWalletBalance();
       }
 
       return true;
@@ -884,9 +979,28 @@ const updateLocalWalletBalance = async (newBalance: number) => {
       const info = JSON.parse(driverInfoStr);
       info.wallet = newBalance;
       await AsyncStorage.setItem('driverInfo', JSON.stringify(info));
+      console.log(`✅ Local wallet updated to: ₹${newBalance}`);
     }
   } catch (e) {
     console.error("Failed to update local wallet:", e);
+  }
+};
+
+// Fetch wallet balance from backend and update locally
+const fetchAndUpdateWalletBalance = async () => {
+  if (!driverId) return;
+  try {
+    const response = await fetch(`${API_BASE}/drivers/${driverId}/wallet`);
+    const result = await response.json();
+
+    if (result.success && result.walletBalance !== undefined) {
+      console.log(`💰 Fetched wallet balance: ₹${result.walletBalance}`);
+      updateLocalWalletBalance(result.walletBalance);
+    } else {
+      console.warn('⚠️ Could not fetch wallet balance');
+    }
+  } catch (error) {
+    console.error('❌ Error fetching wallet balance:', error);
   }
 };
 
@@ -997,7 +1111,20 @@ const goOfflineNormally = useCallback(async () => {
   if (socket && socket.connected) {
     socket.emit("driverOffline", { driverId });
   }
-  await AsyncStorage.setItem("driverOnlineStatus", "offline");
+
+  // ✅ FIX: Update online status in driverInfo object
+  const driverInfoStr = await AsyncStorage.getItem("driverInfo");
+  if (driverInfoStr) {
+    try {
+      const driverInfoObj = JSON.parse(driverInfoStr);
+      driverInfoObj.onlineStatus = "offline";
+      await AsyncStorage.setItem("driverInfo", JSON.stringify(driverInfoObj));
+      console.log('📊 Updated driverInfo with offline status');
+    } catch (e) {
+      console.error("⚠️ Error updating driverInfo:", e);
+    }
+  }
+
   console.log('🔴 Driver is now OFFLINE');
   onlineStatusChanging.current = false;
 }, [driverId, socket, stopBackgroundLocationTracking, stopWorkingHoursTimer]);
@@ -1056,6 +1183,34 @@ const toggleOnlineStatus = useCallback(async () => {
       Alert.alert("Location Required", "Please enable location services to go online.");
       return;
     }
+
+    // ✅ FIX: Check if working hours timer is already active (prevent duplicate debit)
+    if (workingHoursTimer.active && workingHoursTimer.walletDeducted) {
+      console.log("⚠️ Working hours timer already active, just restoring ONLINE state");
+      setIsDriverOnline(true);
+      setDriverStatus("online");
+      startBackgroundLocationTracking();
+      if (socket && !socket.connected) {
+        socket.connect();
+      }
+
+      // Update online status in driverInfo
+      const driverInfoStr = await AsyncStorage.getItem("driverInfo");
+      if (driverInfoStr) {
+        try {
+          const driverInfoObj = JSON.parse(driverInfoStr);
+          driverInfoObj.onlineStatus = "online";
+          await AsyncStorage.setItem("driverInfo", JSON.stringify(driverInfoObj));
+        } catch (e) {
+          console.error("⚠️ Error updating driverInfo:", e);
+        }
+      }
+
+      console.log("🟢 Driver is now online (timer already running)");
+      return;
+    }
+
+    // Only start new timer and debit wallet if not already active
     const canGoOnline = await startWorkingHoursTimer();
     if (canGoOnline) {
       setIsDriverOnline(true);
@@ -1064,11 +1219,24 @@ const toggleOnlineStatus = useCallback(async () => {
       if (socket && !socket.connected) {
         socket.connect();
       }
-      await AsyncStorage.setItem("driverOnlineStatus", "online");
+
+      // ✅ FIX: Update online status in driverInfo object
+      const driverInfoStr = await AsyncStorage.getItem("driverInfo");
+      if (driverInfoStr) {
+        try {
+          const driverInfoObj = JSON.parse(driverInfoStr);
+          driverInfoObj.onlineStatus = "online";
+          await AsyncStorage.setItem("driverInfo", JSON.stringify(driverInfoObj));
+          console.log('📊 Updated driverInfo with online status');
+        } catch (e) {
+          console.error("⚠️ Error updating driverInfo:", e);
+        }
+      }
+
       console.log("🟢 Driver is now online");
     }
   }
-}, [isDriverOnline, location, startWorkingHoursTimer, handleManualOfflineRequest, startBackgroundLocationTracking, socket]);
+}, [isDriverOnline, location, workingHoursTimer, startWorkingHoursTimer, handleManualOfflineRequest, startBackgroundLocationTracking, socket]);
 
 
 
@@ -1085,34 +1253,109 @@ const loadDriverInfo = async () => {
     console.log("🔍 Loading driver info from AsyncStorage...");
     const storedDriverId = await AsyncStorage.getItem("driverId");
     const storedDriverName = await AsyncStorage.getItem("driverName");
-    const storedVehicleType = await AsyncStorage.getItem("driverVehicleType"); // NEW
+    const storedVehicleType = await AsyncStorage.getItem("vehicleType"); // ✅ CRITICAL FIX: Match LoginScreen key
     const token = await AsyncStorage.getItem("authToken");
-    const savedOnlineStatus = await AsyncStorage.getItem("driverOnlineStatus");
-    
+
+    // ✅ FIX: Get online status from driverInfo object (from backend)
+    const driverInfoStr = await AsyncStorage.getItem("driverInfo");
+    let savedOnlineStatus: string | null = null;
+    if (driverInfoStr) {
+      try {
+        const driverInfoObj = JSON.parse(driverInfoStr);
+        savedOnlineStatus = driverInfoObj.onlineStatus || null;
+        console.log(`📊 Driver online status from backend: ${savedOnlineStatus}`);
+      } catch (e) {
+        console.error("⚠️ Error parsing driverInfo:", e);
+      }
+    }
+
     if (storedDriverId && storedDriverName && token) {
       setDriverId(storedDriverId);
       setDriverName(storedDriverName);
       console.log("✅ Token found, skipping verification");
-      
-      // Store vehicle type if available
+
+      // ✅ FIX: Store vehicle type in LOWERCASE ONLY (CRITICAL - STRICT RULE)
       if (storedVehicleType) {
         console.log(`🚗 Driver vehicle type: ${storedVehicleType}`);
-        const normalizedType = storedVehicleType.toUpperCase();
-      console.log(`🚗 Driver vehicle type loaded: ${normalizedType}`);
-      await AsyncStorage.setItem("driverVehicleType", normalizedType);
-   
+        const normalizedType = storedVehicleType.toLowerCase(); // ✅ ALWAYS LOWERCASE
+        console.log(`🚗 Driver vehicle type loaded: ${normalizedType}`);
+        await AsyncStorage.setItem("vehicleType", normalizedType); // ✅ CRITICAL: Match LoginScreen key
+
       } else {
-        // Default to 'taxi' if not set
+        // Default to 'taxi' if not set (already lowercase)
         console.log("⚠️ No vehicle type found, defaulting to 'taxi'");
-        await AsyncStorage.setItem("driverVehicleType", "taxi");
+        await AsyncStorage.setItem("vehicleType", "taxi"); // ✅ CRITICAL: Match LoginScreen key
       }
-      
-      // Restore online status if it was online before
-      if (savedOnlineStatus === "online") {
-        setIsDriverOnline(true);
-        setDriverStatus("online");
-        // Start tracking (socket connect triggered by useEffect on isDriverOnline)
-        startBackgroundLocationTracking();
+
+      // ✅ FIX: Fetch REAL online status and timer from backend
+      try {
+        console.log("🔄 Fetching current driver status from backend...");
+        const statusResponse = await fetch(`${API_BASE}/drivers/${storedDriverId}/status`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json();
+          console.log("✅ Backend status received:", statusData);
+
+          if (statusData.success) {
+            const { isOnline, workingHours, walletBalance } = statusData;
+
+            // Update wallet balance in UI
+            if (walletBalance !== undefined) {
+              await updateLocalWalletBalance(walletBalance);
+            }
+
+            // Restore online/offline state
+            if (isOnline) {
+              console.log("🟢 Driver is ONLINE - restoring state");
+              setIsDriverOnline(true);
+              setDriverStatus("online");
+              startBackgroundLocationTracking();
+
+              // Restore working hours timer if active
+              if (workingHours && workingHours.active && workingHours.remainingSeconds > 0) {
+                console.log(`⏱️ Restoring timer: ${workingHours.remainingSeconds}s remaining`);
+                setWorkingHoursTimer({
+                  active: true,
+                  remainingSeconds: workingHours.remainingSeconds,
+                  formattedTime: formatTime(workingHours.remainingSeconds),
+                  warningsIssued: 0,
+                  walletDeducted: true, // Already debited
+                  totalHours: workingHours.totalHours || 12,
+                });
+              }
+            } else {
+              console.log("🔴 Driver is OFFLINE");
+              setIsDriverOnline(false);
+              setDriverStatus("offline");
+            }
+          }
+        } else {
+          // Backend endpoint not available, fallback to local storage
+          console.log("⚠️ Backend status endpoint not available, using local data");
+          if (savedOnlineStatus === "online") {
+            console.log("🟢 Restoring ONLINE status from local data");
+            setIsDriverOnline(true);
+            setDriverStatus("online");
+            startBackgroundLocationTracking();
+          } else {
+            console.log("🔴 Driver was OFFLINE (local data)");
+          }
+        }
+      } catch (error) {
+        console.error("❌ Error fetching driver status:", error);
+        // Fallback to local storage
+        if (savedOnlineStatus === "online") {
+          console.log("🟢 Restoring ONLINE status from local data (fallback)");
+          setIsDriverOnline(true);
+          setDriverStatus("online");
+          startBackgroundLocationTracking();
+        }
       }
       
       // Try to restore ride state if there was an active ride
@@ -1156,11 +1399,11 @@ const loadDriverInfo = async () => {
 };
 
 
-   
+
     if (!driverId || !driverName) {
       loadDriverInfo();
     }
-  }, [driverId, driverName, navigation, location, restoreRideState]);
+  }, [driverId, driverName, navigation, restoreRideState]);
   
   // Request user location when ride is accepted
   useEffect(() => {
@@ -1187,12 +1430,16 @@ const loadDriverInfo = async () => {
           return;
         }
        
+        // ✅ FIX: Get actual vehicle type from AsyncStorage, never use hardcoded "taxi"
+        const storedVehicleType = await AsyncStorage.getItem("vehicleType");
+        const actualVehicleType = (storedVehicleType || "taxi").toLowerCase(); // ✅ Always lowercase
+
         const payload = {
           driverId,
           driverName: driverName || "Unknown Driver",
           latitude: location.latitude,
           longitude: location.longitude,
-          vehicleType: "taxi",
+          vehicleType: actualVehicleType, // ✅ Use actual vehicle type
           status: driverStatus === "onRide" ? "onRide" : isDriverOnline ? "Live" : "offline",
           rideId: driverStatus === "onRide" ? ride?.rideId : null,
           timestamp: new Date().toISOString(),
@@ -1229,18 +1476,26 @@ const loadDriverInfo = async () => {
     [driverId, driverName, driverStatus, ride?.rideId, isDriverOnline]
   );
   
-  // Register driver with socket
+  // ✅ FIX: Register driver with socket using actual vehicle type
   useEffect(() => {
     if (!isRegistered && driverId && location && isDriverOnline && socket) {
       console.log("📝 Registering driver with socket:", driverId);
-      socket.emit("registerDriver", {
-        driverId,
-        driverName,
-        latitude: location.latitude,
-        longitude: location.longitude,
-        vehicleType: "taxi",
+
+      // ✅ Get actual vehicle type from AsyncStorage
+      AsyncStorage.getItem("vehicleType").then((storedType) => {
+        const actualVehicleType = (storedType || "taxi").toLowerCase(); // ✅ Always lowercase
+
+        socket.emit("registerDriver", {
+          driverId,
+          driverName,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          vehicleType: actualVehicleType, // ✅ Use actual vehicle type
+        });
+
+        console.log(`✅ Driver registered: ${driverId} - ${actualVehicleType}`);
+        setIsRegistered(true);
       });
-      setIsRegistered(true);
     }
   }, [driverId, location, isRegistered, driverName, isDriverOnline]);
   
@@ -1362,42 +1617,46 @@ const handleConnect = () => {
   setSocketConnected(true);
   
   if (location && driverId && isDriverOnline) {
-    AsyncStorage.getItem("driverVehicleType").then(vehicleType => {
-      const finalVehicleType = vehicleType || "taxi";
-      
+    AsyncStorage.getItem("vehicleType").then(vehicleType => {
+      const finalVehicleType = (vehicleType || "taxi").toLowerCase(); // ✅ Always lowercase
+
       // Register driver with all necessary info
       socket.emit("registerDriver", {
         driverId,
         driverName,
         latitude: location.latitude,
         longitude: location.longitude,
-        vehicleType: finalVehicleType,
+        vehicleType: finalVehicleType, // ✅ Lowercase vehicle type
         status: driverStatus // Include current status
       });
       setIsRegistered(true);
-      
+
       console.log(`✅ Driver registered: ${driverId} - ${finalVehicleType} - ${driverStatus}`);
-      
+
       // Start emitting location updates
       startLocationUpdates();
     });
   }
 };
 
-// Add function to start location updates
-const startLocationUpdates = useCallback(() => {
+// ✅ FIX: Add function to start location updates with actual vehicle type
+const startLocationUpdates = useCallback(async () => {
   if (!isDriverOnline || !location || !socket) return;
-  
+
+  // ✅ Get actual vehicle type
+  const storedType = await AsyncStorage.getItem("vehicleType");
+  const actualVehicleType = (storedType || "taxi").toLowerCase(); // ✅ Always lowercase
+
   // Emit initial location
   socket.emit("driverLocationUpdate", {
     driverId,
     latitude: location.latitude,
     longitude: location.longitude,
     status: driverStatus,
-    vehicleType: "taxi"
+    vehicleType: actualVehicleType // ✅ Use actual vehicle type
   });
-  
-  console.log('📍 Started location updates for driver:', driverId);
+
+  console.log(`📍 Started location updates for driver: ${driverId} - ${actualVehicleType}`);
 }, [isDriverOnline, location, driverId, driverStatus, socket]);
 
 
@@ -2083,10 +2342,10 @@ const completeRide = useCallback(async () => {
 socket.on("newRideRequest", async (data: any) => {
   if (!isMounted.current || !data?.rideId || !isDriverOnline) return;
 
-  // ✅ FIX: Normalize both types to UPPERCASE for comparison
-  const storedType = await AsyncStorage.getItem("driverVehicleType");
-  const myDriverType = (storedType || "taxi").trim().toUpperCase();
-  const incomingVehicleType = (data.vehicleType || "").trim().toUpperCase();
+  // ✅ FIX: Normalize both types to LOWERCASE for comparison (STRICT RULE)
+  const storedType = await AsyncStorage.getItem("vehicleType");
+  const myDriverType = (storedType || "taxi").trim().toLowerCase(); // ✅ ALWAYS LOWERCASE
+  const incomingVehicleType = (data.vehicleType || "").trim().toLowerCase(); // ✅ ALWAYS LOWERCASE
 
   console.log(`🚗 Socket Request: Me=[${myDriverType}] vs Ride=[${incomingVehicleType}]`);
 
@@ -2099,7 +2358,7 @@ socket.on("newRideRequest", async (data: any) => {
   console.log(`🚗 Received ride request for ${data.vehicleType}`);
   
   // Check if vehicle types match
-  AsyncStorage.getItem("driverVehicleType").then((driverVehicleType) => {
+  AsyncStorage.getItem("vehicleType").then((driverVehicleType) => {
     if (data.vehicleType && driverVehicleType && data.vehicleType !== driverVehicleType) {
       console.log(`🚫 Ignoring ride request: Driver is ${driverVehicleType}, ride requires ${data.vehicleType}`);
       return;
@@ -2214,12 +2473,12 @@ const handleBillModalClose = useCallback(() => {
 
   console.log(`🚗 Received ride request for ${data.vehicleType}`);
 
-  AsyncStorage.getItem("driverVehicleType").then((driverVehicleType) => {
-    // Default to 'taxi' if null, convert BOTH to uppercase for comparison
-    const driverType = (driverVehicleType || "taxi").toUpperCase();
-    const requestVehicleType = (data.vehicleType || "").toUpperCase();
+  AsyncStorage.getItem("vehicleType").then((driverVehicleType) => {
+    // ✅ FIX: Default to 'taxi' if null, convert BOTH to LOWERCASE for comparison (STRICT RULE)
+    const driverType = (driverVehicleType || "taxi").toLowerCase(); // ✅ ALWAYS LOWERCASE
+    const requestVehicleType = (data.vehicleType || "").toLowerCase(); // ✅ ALWAYS LOWERCASE
 
-    // ✅ FIX: Case-insensitive comparison
+    // ✅ STRICT: Only process if vehicle types match exactly
     if (requestVehicleType && driverType && requestVehicleType !== driverType) {
       console.log(`🚫 Ignoring ride request: Driver is ${driverType}, ride requires ${requestVehicleType}`);
       return;
@@ -2823,19 +3082,26 @@ const handleBillModalClose = useCallback(() => {
         initialRegion={{
           latitude: location.latitude,
           longitude: location.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
+          latitudeDelta: 0.027, // ✅ ~3km view (zoom constraint)
+          longitudeDelta: 0.027,
         }}
-        showsUserLocation
-        showsMyLocationButton
+        showsUserLocation={true}  // ✅ ENABLE as fallback - will show blue dot if custom marker fails
+        showsMyLocationButton={true}
         showsCompass={true}
         showsScale={true}
         zoomControlEnabled={true}
         rotateEnabled={true}
         scrollEnabled={true}
         zoomEnabled={true}
+        pitchEnabled={true}  // ✅ Enable 3D tilt
+        minZoomLevel={11}  // ✅ ~30km max zoom out
+        maxZoomLevel={18}  // ✅ ~1km max zoom in (even closer than 3km for detail)
+        loadingEnabled={true}
+        loadingIndicatorColor="#4caf50"
         region={mapRegion}
       >
+        {/* ✅ Professional Blue Dot - Native smooth location tracking */}
+
         {/* Pickup Marker with Blue Icon */}
         {ride && rideStatus !== "started" && (
           <Marker
@@ -2866,7 +3132,19 @@ const handleBillModalClose = useCallback(() => {
           </Marker>
         )}
       
-        {/* RED ROUTE - Dynamic polyline after OTP (OTP verification to drop) */}
+        {/* ✅ TRAVELLED ROUTE (Grey/Faded) - Shows where driver has been */}
+        {rideStatus === "started" && travelledRoute.length > 1 && (
+          <Polyline
+            coordinates={travelledRoute}
+            strokeWidth={6}
+            strokeColor="rgba(158, 158, 158, 0.6)"
+            lineCap="round"
+            lineJoin="round"
+            lineDashPattern={[0]}
+          />
+        )}
+
+        {/* ✅ RED ROUTE - Dynamic remaining polyline after OTP with smooth fade */}
         {rideStatus === "started" && visibleRouteCoords.length > 0 && (
           <Polyline
             coordinates={visibleRouteCoords}
@@ -2876,8 +3154,8 @@ const handleBillModalClose = useCallback(() => {
             lineJoin="round"
           />
         )}
-      
-        {/* GREEN ROUTE - Dynamic polyline before OTP (driver to pickup) */}
+
+        {/* ✅ GREEN ROUTE - Dynamic polyline before OTP (driver to pickup) */}
         {rideStatus === "accepted" && ride?.routeCoords?.length && (
           <Polyline
             coordinates={ride.routeCoords}
@@ -3428,6 +3706,37 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
     marginTop: -4,
+  },
+  // ✅ SMOOTH ANIMATED DRIVER MARKER STYLES
+  driverMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 50,
+    height: 50,
+  },
+  driverMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#4caf50',
+    borderWidth: 3,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  accuracyCircle: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(76, 175, 80, 0.15)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(76, 175, 80, 0.4)',
   },
   // Professional Maximized Passenger Details (Screenshot Layout)
   maximizedDetailsContainer: {
@@ -8133,7 +8442,7 @@ const styles = StyleSheet.create({
 //   console.log('🔔 Processing notification ride request:', data.rideId);
 
 //   // ✅ FIX: Normalize both types to UPPERCASE for comparison
-//   const storedType = await AsyncStorage.getItem("driverVehicleType");
+//   const storedType = await AsyncStorage.getItem("vehicleType");
 //   const myDriverType = (storedType || "taxi").trim().toUpperCase(); 
 //   const requestVehicleType = (data.vehicleType || "").trim().toUpperCase();
 
@@ -8267,7 +8576,7 @@ const styles = StyleSheet.create({
 //     console.log("🔍 Loading driver info from AsyncStorage...");
 //     const storedDriverId = await AsyncStorage.getItem("driverId");
 //     const storedDriverName = await AsyncStorage.getItem("driverName");
-//     const storedVehicleType = await AsyncStorage.getItem("driverVehicleType"); // NEW
+//     const storedVehicleType = await AsyncStorage.getItem("vehicleType"); // NEW
 //     const token = await AsyncStorage.getItem("authToken");
 //     const savedOnlineStatus = await AsyncStorage.getItem("driverOnlineStatus");
     
@@ -8544,7 +8853,7 @@ const styles = StyleSheet.create({
 //   setSocketConnected(true);
   
 //   if (location && driverId && isDriverOnline) {
-//     AsyncStorage.getItem("driverVehicleType").then(vehicleType => {
+//     AsyncStorage.getItem("vehicleType").then(vehicleType => {
 //       const finalVehicleType = vehicleType || "taxi";
       
 //       // Register driver with all necessary info
@@ -9092,7 +9401,7 @@ const styles = StyleSheet.create({
 //   if (!isMounted.current || !data?.rideId || !isDriverOnline) return;
 
 //   // ✅ FIX: Normalize both types to UPPERCASE for comparison
-//   const storedType = await AsyncStorage.getItem("driverVehicleType");
+//   const storedType = await AsyncStorage.getItem("vehicleType");
 //   const myDriverType = (storedType || "taxi").trim().toUpperCase();
 //   const incomingVehicleType = (data.vehicleType || "").trim().toUpperCase();
 
@@ -9107,7 +9416,7 @@ const styles = StyleSheet.create({
 //   console.log(`🚗 Received ride request for ${data.vehicleType}`);
   
 //   // Check if vehicle types match
-//   AsyncStorage.getItem("driverVehicleType").then((driverVehicleType) => {
+//   AsyncStorage.getItem("vehicleType").then((driverVehicleType) => {
 //     if (data.vehicleType && driverVehicleType && data.vehicleType !== driverVehicleType) {
 //       console.log(`🚫 Ignoring ride request: Driver is ${driverVehicleType}, ride requires ${data.vehicleType}`);
 //       return;
@@ -9217,7 +9526,7 @@ const styles = StyleSheet.create({
 
 //   console.log(`🚗 Received ride request for ${data.vehicleType}`);
 
-//   AsyncStorage.getItem("driverVehicleType").then((driverVehicleType) => {
+//   AsyncStorage.getItem("vehicleType").then((driverVehicleType) => {
 //     // Default to 'taxi' if null, convert BOTH to uppercase for comparison
 //     const driverType = (driverVehicleType || "taxi").toUpperCase();
 //     const requestVehicleType = (data.vehicleType || "").toUpperCase();

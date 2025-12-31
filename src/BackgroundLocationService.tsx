@@ -70,6 +70,7 @@ export async function startBackgroundService() {
                   latitude: pos.coords.latitude,
                   longitude: pos.coords.longitude,
                   speed: pos.coords.speed || 0,
+                  bearing: pos.coords.heading || 0,  // ✅ ADD BEARING for smooth rotation
                   timestamp: new Date().toISOString(),
                   isBackground: true,
                 };

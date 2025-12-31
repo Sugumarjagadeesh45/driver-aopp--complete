@@ -2,8 +2,9 @@ import { Platform } from 'react-native';
 
 // --- Select URLs based on environment ---
 // Set to `true` for local development, `false` for production
-const IS_DEVELOPMENT = true;
+const IS_DEVELOPMENT = true;  // ✅ LOCALHOST MODE - Using local development server
 
+// ✅ LOCALHOST CONFIGURATION - PORT 5001
 // For Android Emulator, 'localhost' of the host machine is 10.0.2.2
 const LOCAL_API_URL_ANDROID = 'http://10.0.2.2:5001/api';
 const LOCAL_SOCKET_URL_ANDROID = 'http://10.0.2.2:5001';
@@ -12,8 +13,9 @@ const LOCAL_SOCKET_URL_ANDROID = 'http://10.0.2.2:5001';
 const LOCAL_API_URL_IOS = 'http://localhost:5001/api';
 const LOCAL_SOCKET_URL_IOS = 'http://localhost:5001';
 
-const PROD_API_URL = 'https://taxi.webase.co.in/api';
-const PROD_SOCKET_URL = 'https://taxi.webase.co.in';
+// Production server (currently disabled)
+const PROD_API_URL = 'http://localhost:5001/api';
+const PROD_SOCKET_URL = 'http://localhost:5001';
 
 export const API_BASE = IS_DEVELOPMENT
   ? Platform.select({

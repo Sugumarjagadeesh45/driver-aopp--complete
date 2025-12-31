@@ -1,5 +1,5 @@
 // src/ProfileScreen.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Alert,
   Image,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -51,9 +52,18 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
   const [editableAddress, setEditableAddress] = useState('');
   const [editableEmergencyContact, setEditableEmergencyContact] = useState('');
 
+  // Load profile data on mount
   useEffect(() => {
     loadProfileData();
   }, []);
+
+  // ✅ FIX: Reload profile data when screen comes into focus (for real-time wallet updates)
+  useFocusEffect(
+    useCallback(() => {
+      console.log('📱 ProfileScreen focused - reloading profile data');
+      loadProfileData();
+    }, [])
+  );
 
   const loadProfileData = async () => {
     try {
