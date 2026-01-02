@@ -1750,6 +1750,10 @@ const startLocationUpdates = useCallback(async () => {
       }
     }, 10000);
 
+    // ✅ Retrieve driver phone number
+    const storedPhone = await AsyncStorage.getItem('phoneNumber');
+    const finalDriverPhone = driverProfile.phone || storedPhone || '';
+
     if (socket) {
       socket.emit(
         "acceptRide",
@@ -1757,6 +1761,7 @@ const startLocationUpdates = useCallback(async () => {
           rideId: currentRideId,
           driverId: driverId,
           driverName: driverName,
+          driverPhone: finalDriverPhone,
           vehicleType: currentRideObj?.vehicleType || 'taxi', // ✅ Send vehicle type for validation
         },
         async (response: any) => {
