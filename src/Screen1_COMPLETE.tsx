@@ -75,6 +75,7 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
     "offline" | "online" | "onRide"
   >("offline");
   const [isLoading, setIsLoading] = useState(false);
+  const [isCompletingRide, setIsCompletingRide] = useState(false);
   const mapRef = useRef<MapView | null>(null);
   const [driverId, setDriverId] = useState<string>(route.params?.driverId || "");
   const [driverName, setDriverName] = useState<string>(
@@ -90,6 +91,10 @@ const DriverScreen = ({ route, navigation }: { route: any; navigation: any }) =>
 
   // App state management
   const [isAppActive, setIsAppActive] = useState(true);
+
+  // ✅ Prevent multiple button clicks
+  const [isAcceptingRide, setIsAcceptingRide] = useState(false);
+  const [isRejectingRide, setIsRejectingRide] = useState(false);
 
   // New states for verification and bill
   const [showVerificationModal, setShowVerificationModal] = useState(false);
@@ -752,7 +757,7 @@ const handleNotificationRideRequest = useCallback(async (data: any) => {
         },
         {
           text: "✅ Accept",
-          onPress: () => acceptRide(rideData.rideId),
+          onPress: () => acceptRide(rideData),
         },
       ],
       { cancelable: false }
@@ -1722,9 +1727,19 @@ const startNavigation = useCallback(async (startLocation: LocationType) => {
   
   // Reject ride
   const rejectRide = (rideId?: string) => {
+    // ✅ CRITICAL: Prevent multiple clicks
+    if (isRejectingRide) {
+      console.log("⚠️ Already processing ride rejection, ignoring duplicate click");
+      return;
+    }
+
     const currentRideId = rideId || ride?.rideId;
     if (!currentRideId) return;
    
+    // ✅ Set rejecting state to prevent duplicate clicks
+    setIsRejectingRide(true);
+    console.log("✅ Rejecting ride:", currentRideId);
+
     // Clean map data
     clearMapData();
    
@@ -1743,6 +1758,12 @@ const startNavigation = useCallback(async (startLocation: LocationType) => {
     }
    
     Alert.alert("Ride Rejected ❌", "You rejected the ride");
+
+    // ✅ Reset rejecting state after a short delay
+    setTimeout(() => {
+      setIsRejectingRide(false);
+      console.log("✅ Ride rejection complete");
+    }, 1000);
   };
   
   // Clear all map data (markers, routes, polylines)
@@ -1903,251 +1924,99 @@ const startNavigation = useCallback(async (startLocation: LocationType) => {
 
 
 
-const completeRide = useCallback(async () => {
-  console.log("🏁 COMPLETE RIDE FUNCTION CALLED");
-  console.log("📊 Current state:", {
-    rideStatus,
-    driverStatus,
-    rideExists: !!ride,
-    locationExists: !!location,
-    otpVerificationLocationExists: !!otpVerificationLocation
-  });
-  
-  if (rideStatus !== "started") {
-    console.error("❌ Cannot complete: Ride not started, status is", rideStatus);
-    Alert.alert("Cannot Complete", "Ride must be started to complete.");
-    return;
-  }
-  
-  if (!ride) {
-    console.error("❌ Complete Ride Failed: No Ride Data");
-    Alert.alert("Error", "Ride data is missing.");
-    return;
-  }
-  
-  if (!location) {
-    console.error("❌ Complete Ride Failed: No Current Location");
-    Alert.alert("Error", "Current location is missing. Please wait for GPS.");
-    return;
-  }
-
-  // ✅ CRITICAL FIX: Update ride status IMMEDIATELY to prevent race conditions
-  setRideStatus("completed");
-  setDriverStatus("online");
-  
-  // ✅ Stop navigation immediately
-  stopNavigation();
-  
-  // Calculate distance from OTP verification location or pickup
-  let startPoint = otpVerificationLocation;
-  
-  if (!startPoint) {
-    console.warn("⚠️ OTP Location missing, falling back to Pickup location");
-    startPoint = {
-      latitude: ride.pickup.latitude,
-      longitude: ride.pickup.longitude
-    };
-  }
-
-  try {
-    const distance = haversine(startPoint, location) / 1000;
-    const finalDistance = Math.max(distance, 0.1); // Minimum 100 meters
-    const farePerKm = ride.fare || 15;
-    const finalFare = Math.round(finalDistance * farePerKm);
-    
-    console.log(`💰 Fare Calculation: ${finalDistance.toFixed(2)}km * ₹${farePerKm} = ₹${finalFare}`);
-
-    // ✅ FIX: Hide rider details BEFORE showing bill modal
-    hideRiderDetails();
-    
-    // Prepare bill details
-    const billData = {
-      distance: `${finalDistance.toFixed(2)} km`,
-      travelTime: `${Math.round(finalDistance * 10)} mins`,
-      charge: finalFare,
-      userName: userData?.name || 'Customer',
-      userMobile: userData?.mobile || 'N/A',
-      baseFare: finalFare,
-      timeCharge: 0,
-      tax: 0
-    };
-    
-    // ✅ CRITICAL: Save completed ride state to AsyncStorage BEFORE showing modal
-    await saveRideState();
-    
-    // Show bill modal
-    setBillDetails(billData);
-    setShowBillModal(true);
-    
-    // Clear map data
-    clearMapData();
-    
-    console.log("✅ Ride completion process initiated");
-
-    // ✅ CRITICAL: Emit completion to server AFTER UI is updated
-    if (socket && socket.connected) {
-      console.log("📡 Emitting ride completion to server...");
-      socket.emit("driverCompletedRide", {
-        rideId: ride.rideId,
-        driverId: driverId,
-        userId: userData?.userId,
-        distance: finalDistance,
-        fare: finalFare,
-        actualPickup: startPoint,
-        actualDrop: location,
-        timestamp: new Date().toISOString()
-      });
-    }
-
-  } catch (error) {
-    console.error("❌ Error in completeRide:", error);
-    Alert.alert("Error", "Failed to complete ride. Please try again.");
-    
-    // Revert status if failed
-    setRideStatus("started");
-    setDriverStatus("onRide");
-  }
-}, [
-  ride, 
-  rideStatus, 
-  driverStatus, 
-  location, 
-  otpVerificationLocation, 
-  stopNavigation, 
-  clearMapData, 
-  socket, 
-  driverId, 
-  userData,
-  haversine,
-  hideRiderDetails,
-  saveRideState // ✅ Added this dependency
-]);
-
-
-
-
-socket.on("newRideRequest", async (data: any) => {
-  if (!isMounted.current || !data?.rideId || !isDriverOnline) return;
-
-  // ✅ FIX: Normalize both types to UPPERCASE for comparison
-  const storedType = await AsyncStorage.getItem("driverVehicleType");
-  const myDriverType = (storedType || "taxi").trim().toUpperCase();
-  const incomingVehicleType = (data.vehicleType || "").trim().toUpperCase();
-
-  console.log(`🚗 Socket Request: Me=[${myDriverType}] vs Ride=[${incomingVehicleType}]`);
-
-  // Compare case-insensitively
-  if (incomingVehicleType && myDriverType && myDriverType !== incomingVehicleType) {
-    console.log(`🚫 Ignoring ride request: Driver is ${myDriverType}, ride requires ${incomingVehicleType}`);
-    return;
-  }
-  
-  console.log(`🚗 Received ride request for ${data.vehicleType}`);
-  
-  // Check if vehicle types match
-  AsyncStorage.getItem("driverVehicleType").then((driverVehicleType) => {
-    if (data.vehicleType && driverVehicleType && data.vehicleType !== driverVehicleType) {
-      console.log(`🚫 Ignoring ride request: Driver is ${driverVehicleType}, ride requires ${data.vehicleType}`);
+  const completeRide = useCallback(async () => {
+    if (isCompletingRide) {
+      console.log("⏳ Already completing ride, ignoring click");
       return;
     }
-    
-    // Process the ride request
-    try {
-      // Parse pickup and drop locations if they're strings
-      let pickupLocation, dropLocation;
-      
-      try {
-        if (typeof data.pickup === 'string') {
-          pickupLocation = JSON.parse(data.pickup);
-        } else {
-          pickupLocation = data.pickup;
-        }
-        
-        if (typeof data.drop === 'string') {
-          dropLocation = JSON.parse(data.drop);
-        } else {
-          dropLocation = data.drop;
-        }
-      } catch (error) {
-        console.error('Error parsing location data:', error);
-        return;
-      }
-      
-      const rideData: RideType = {
-        rideId: data.rideId,
-        RAID_ID: data.RAID_ID || "N/A",
-        otp: data.otp || "0000",
-        pickup: {
-          latitude: pickupLocation?.lat || pickupLocation?.latitude || 0,
-          longitude: pickupLocation?.lng || pickupLocation?.longitude || 0,
-          address: pickupLocation?.address || "Unknown location",
-        },
-        drop: {
-          latitude: dropLocation?.lat || dropLocation?.latitude || 0,
-          longitude: dropLocation?.lng || dropLocation?.longitude || 0,
-          address: dropLocation?.address || "Unknown location",
-        },
-        fare: parseFloat(data.fare) || 0,
-        distance: data.distance || "0 km",
-        vehicleType: data.vehicleType, // Store vehicle type from notification
-        userName: data.userName || "Customer",
-        userMobile: data.userMobile || "N/A",
-      };
-     
-      setRide(rideData);
-      setRideStatus("onTheWay");
-     
-      Alert.alert(
-        "🚖 New Ride Request!",
-        `📍 Pickup: ${rideData.pickup.address}\n🎯 Drop: ${rideData.drop.address}\n💰 Fare: ₹${rideData.fare}\n📏 Distance: ${rideData.distance}\n👤 Customer: ${rideData.userName}`,
-        [
-          {
-            text: "❌ Reject",
-            onPress: () => rejectRide(rideData.rideId),
-            style: "destructive",
-          },
-          {
-            text: "✅ Accept",
-            onPress: () => acceptRide(rideData.rideId),
-          },
-        ],
-        { cancelable: false }
-      );
-    } catch (error) {
-      console.error("❌ Error processing ride request:", error);
-      Alert.alert("Error", "Could not process ride request. Please try again.");
+    if (rideStatus !== "started") {
+      Alert.alert("Cannot Complete", "Ride must be started to complete.");
+      return;
     }
-  });
-}); // ADDED THIS CLOSING PARENTHESIS
+    if (!ride || !location) {
+      Alert.alert("Error", "Missing ride or location data.");
+      return;
+    }
 
+    setIsCompletingRide(true);
 
+    try {
+      // 1. Calculate fare
+      const startPoint = otpVerificationLocation || ride.pickup;
+      const distance = haversine(startPoint, location) / 1000;
+      const finalDistance = Math.max(distance, 0.1);
+      const farePerKm = ride.fare || 15;
+      const finalFare = Math.round(finalDistance * farePerKm);
+      console.log(`💰 Fare Calculation: ${finalDistance.toFixed(2)}km * ₹${farePerKm} = ₹${finalFare}`);
 
+      // 2. Emit to server
+      if (socket && socket.connected) {
+        socket.emit("driverCompletedRide", {
+          rideId: ride.rideId,
+          driverId: driverId,
+          userId: userData?.userId,
+          distance: finalDistance,
+          fare: finalFare,
+          actualPickup: startPoint,
+          actualDrop: location,
+          timestamp: new Date().toISOString(),
+        });
+      }
 
-const handleBillModalClose = useCallback(() => {
-  console.log("💰 Bill modal closing, finalizing ride...");
-  
-  // Reset all ride states
-  setRide(null);
-  setUserData(null);
-  setOtpSharedTime(null);
-  setOtpVerificationLocation(null);
-  setRideStatus("idle");
-  setDriverStatus("online");
-  
-  // Clean map
-  clearMapData();
-  
-  // Hide rider details
-  hideRiderDetails();
-  
-  // Clear AsyncStorage
-  clearRideState();
-  
-  // Close modal
-  setShowBillModal(false);
-  
-  console.log("✅ Ride fully completed and cleaned up");
-}, [clearMapData, clearRideState, hideRiderDetails]);
+      // 3. Prepare bill data
+      const billData = {
+        distance: `${finalDistance.toFixed(2)} km`,
+        travelTime: `${Math.round(finalDistance * 10)} mins`,
+        charge: finalFare,
+        userName: userData?.name || 'Customer',
+        userMobile: userData?.mobile || 'N/A',
+        baseFare: finalFare,
+        timeCharge: 0,
+        tax: 0,
+      };
+
+      // 4. Set status to completed and show modal (mimics old "working" logic)
+      setRideStatus("completed");
+      setBillDetails(billData);
+      setShowBillModal(true);
+      hideRiderDetails();
+      stopNavigation();
+
+    } catch (error) {
+      console.error("❌ Error in completeRide:", error);
+      Alert.alert("Error", "Failed to complete ride. Please try again.");
+      // Revert status if something failed
+      setRideStatus("started");
+    } finally {
+      setIsCompletingRide(false);
+    }
+  }, [
+    ride, rideStatus, location, otpVerificationLocation, userData, driverId, socket,
+    stopNavigation, haversine, hideRiderDetails, isCompletingRide
+  ]);
+
+  const handleBillModalClose = useCallback(() => {
+    console.log("💰 Bill confirmed, finalizing and cleaning up ride...");
+
+    // Hide the modal
+    setShowBillModal(false);
+
+    // Set final statuses
+    setRideStatus("idle");
+    setDriverStatus("online");
+
+    // Reset all ride-related data
+    setRide(null);
+    setUserData(null);
+    setOtpSharedTime(null);
+    setOtpVerificationLocation(null);
+
+    // Clean up map and persisted state
+    clearMapData();
+    clearRideState();
+
+    console.log("✅ Ride fully completed and state has been reset.");
+  }, [clearMapData, clearRideState]);
   
   // Handle verification modal close
   const handleVerificationModalClose = () => {
@@ -2228,7 +2097,7 @@ const handleBillModalClose = useCallback(() => {
           },
           {
             text: "✅ Accept",
-            onPress: () => acceptRide(rideData.rideId),
+            onPress: () => acceptRide(rideData),
           },
         ],
         { cancelable: false }
@@ -2834,8 +2703,9 @@ const handleBillModalClose = useCallback(() => {
       {ride && (rideStatus === "accepted" || rideStatus === "started") ? (
         <TouchableOpacity
           style={[
-            styles.button, 
-            rideStatus === "accepted" ? styles.startButton : styles.completeButton
+            styles.button,
+            rideStatus === "accepted" ? styles.startButton : styles.completeButton,
+            isCompletingRide && styles.buttonDisabled
           ]}
           onPress={() => {
             if (rideStatus === "accepted") {
@@ -2845,14 +2715,19 @@ const handleBillModalClose = useCallback(() => {
             }
           }}
           activeOpacity={0.7}
+          disabled={isCompletingRide}
         >
-          <MaterialIcons 
-            name={rideStatus === "accepted" ? "play-arrow" : "flag"} 
-            size={24} 
-            color="#fff" 
-          />
+          {isCompletingRide ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <MaterialIcons
+              name={rideStatus === "accepted" ? "play-arrow" : "flag"}
+              size={24}
+              color="#fff"
+            />
+          )}
           <Text style={styles.btnText}>
-            {rideStatus === "accepted" ? "Enter OTP & Start Ride" : `Complete Ride (${distanceSinceOtp.current.toFixed(2)} km)`}
+            {isCompletingRide ? "Completing..." : rideStatus === "accepted" ? "Enter OTP & Start Ride" : `Complete Ride (${distanceSinceOtp.current.toFixed(2)} km)`}
           </Text>
         </TouchableOpacity>
       ) : null}
@@ -3572,6 +3447,10 @@ const styles = StyleSheet.create({
   rejectButton: {
     backgroundColor: "#f44336",
     flex: 1,
+  },
+  buttonDisabled: {
+    backgroundColor: "#95a5a6",
+    opacity: 0.7,
   },
 
 
